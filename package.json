@@ -1,0 +1,9 @@
+{
+  "name": "claude-usage-limit-presence",
+  "version": "0.1.0",
+  "description": "Userscript development environment",
+  "scripts": {},
+  "devDependencies": {
+    "@types/tampermonkey": "latest"
+  }
+}

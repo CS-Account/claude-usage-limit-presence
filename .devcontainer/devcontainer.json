@@ -1,0 +1,39 @@
+{
+	"name": "Userscript Dev (Fedora + Node.js)",
+	"runArgs": [
+		"--platform=linux/amd64",
+		"--network=pasta:--tcp-ns,1234:1234",
+		"--userns=keep-id"
+	],
+	"updateRemoteUserUID": true,
+	"remoteUser": "vscode",
+	"remoteEnv": {
+		"ANSIBLE_HOME": "/home/vscode/.ansible"
+	},
+	"build": {
+		"dockerfile": "Containerfile",
+		"args": {
+			"USERNAME": "vscode",
+			"USER_UID": "1000",
+			"USER_GID": "1000",
+			"NVM_VERSION": "0.40.1",
+			"NODE_VERSION": "25"
+		}
+	},
+	"workspaceMount": "type=bind,source=${localWorkspaceFolder},target=/workspace/${localWorkspaceFolderBasename}",
+	"workspaceFolder": "/workspace/${localWorkspaceFolderBasename}",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"redhat.vscode-yaml",
+				"redhat.ansible"
+			],
+			"settings": {
+				"python.defaultInterpreterPath": "/usr/bin/python3",
+				"ansible.python.interpreterPath": "/usr/bin/python3",
+				"ansible.lightspeed.enabled": false
+			}
+		}
+	}
+}

@@ -1,0 +1,23 @@
+FROM registry.fedoraproject.org/fedora:latest
+
+# Build arguments for user configuration
+ARG USERNAME=vscode
+ARG USER_UID=1000
+ARG USER_GID=1000
+ARG NVM_VERSION=0.40.1
+ARG NODE_VERSION=25
+
+# Install Ansible
+RUN dnf -y update && \
+    dnf -y install ansible python3-dnf && \
+    dnf clean all
+
+# Copy and run the ansible playbook
+COPY setup.yml /tmp/setup.yml
+RUN USERNAME="${USERNAME}" \
+    USER_UID="${USER_UID}" \
+    USER_GID="${USER_GID}" \
+    NVM_VERSION="${NVM_VERSION}" \
+    NODE_VERSION="${NODE_VERSION}" \
+    ansible-playbook /tmp/setup.yml && \
+    rm /tmp/setup.yml
