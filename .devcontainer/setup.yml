@@ -1,0 +1,124 @@
+---
+- name: Configure Dev Container
+  hosts: localhost
+  connection: local
+  become: true
+
+  vars:
+    nvm_version: "{{ lookup('env', 'NVM_VERSION') }}"
+    node_version: "{{ lookup('env', 'NODE_VERSION') }}"
+    username: "{{ lookup('env', 'USERNAME') }}"
+    user_uid: "{{ lookup('env', 'USER_UID') | default('1000', true) }}"
+    user_gid: "{{ lookup('env', 'USER_GID') | default('1000', true) }}"
+    user_home: "/home/{{ username }}"
+
+  tasks:
+    - name: Install development tools
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - nano
+          - which
+          - "@development-tools" # Adds libatomic for node
+          - git
+          - tree
+          - python3-ansible-lint
+          - shadow-utils
+          - sudo
+        state: present
+
+    - name: Create user group first
+      ansible.builtin.group:
+        name: "{{ username }}"
+        gid: "{{ user_gid }}"
+        state: present
+
+    - name: Create user with explicit UID/GID
+      ansible.builtin.user:
+        name: "{{ username }}"
+        uid: "{{ user_uid }}"
+        group: "{{ username }}"
+        groups: wheel
+        append: true
+        shell: /bin/bash
+        create_home: true
+        home: "{{ user_home }}"
+        state: present
+
+    - name: Ensure home directory has correct ownership
+      ansible.builtin.file:
+        path: "{{ user_home }}"
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        mode: "0755"
+        state: directory
+
+    - name: Passwordless sudo for wheel
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/99-wheel-nopasswd
+        content: "%wheel ALL=(ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+    - name: Create workspaces directory
+      ansible.builtin.file:
+        path: /workspaces
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        mode: "0755"
+        state: directory
+
+    - name: Install NVM + Node
+      become: true
+      become_user: "{{ username }}"
+      environment:
+        HOME: "{{ user_home }}"
+      block:
+        - name: Install NVM
+          ansible.builtin.shell: |
+            set -euo pipefail
+            curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v{{ nvm_version }}/install.sh | PROFILE=/dev/null bash
+          args:
+            executable: /bin/bash
+            creates: "{{ user_home }}/.nvm/nvm.sh"
+
+        - name: Ensure NVM loads in bash shells
+          ansible.builtin.lineinfile:
+            path: "{{ user_home }}/.bashrc"
+            create: true
+            mode: "0644"
+            line: 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
+            insertafter: EOF
+
+        - name: Install Node via NVM
+          ansible.builtin.shell: |
+            set -euo pipefail
+            export NVM_DIR="$HOME/.nvm"
+            . "$NVM_DIR/nvm.sh"
+            nvm install "{{ node_version }}"
+            nvm alias default "{{ node_version }}"
+          args:
+            executable: /bin/bash
+            creates: "{{ user_home }}/.nvm/alias/default"
+
+        - name: Verify Node runs
+          ansible.builtin.shell: |
+            set -euo pipefail
+            export NVM_DIR="$HOME/.nvm"
+            . "$NVM_DIR/nvm.sh"
+            node -v
+          args:
+            executable: /bin/bash
+          register: node_check
+          changed_when: false
+          failed_when: node_check.stdout == ""
+
+    - name: Fix .ansible directory ownership
+      ansible.builtin.file:
+        path: "{{ user_home }}/.ansible"
+        owner: "{{ username }}"
+        group: "{{ username }}"
+        recurse: true
+        state: directory

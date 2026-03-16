@@ -1,0 +1,9 @@
+{
+  "name": "claude-ai-usage-widget",
+  "version": "0.1.0",
+  "description": "Userscript development environment",
+  "scripts": {},
+  "devDependencies": {
+    "@types/tampermonkey": "latest"
+  }
+}
