@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude AI Usage Widget
 // @namespace    claude-ai-usage-widget
-// @version      0.1.1
+// @version      0.2.0
 // @description  Floating usage stats widget for claude.ai; suppresses the chat-box usage warning.
 // @author       CS-Account
 // @match        https://claude.ai/*
@@ -15,7 +15,6 @@
     /**
      * XPath to locate the near-limit warning banner in the chat box.
      * Matches the outermost ancestor div (px-3 md:px-2) containing a usage-limit span.
-     * Deliberately avoids matching the exact percentage so it works if the threshold changes.
      * @type {string}
      */
     const WARNING_XPATH =
@@ -31,9 +30,6 @@
     /** localStorage key for persisting the widget's vertical position. @type {string} */
     const POSITION_STORAGE_KEY = 'claude-usage-panel-vertical-position-px';
 
-    /** localStorage key for persisting the widget's minimized state. @type {string} */
-    const MINIMIZED_STORAGE_KEY = 'claude-usage-panel-minimized';
-
     /** @type {string|null} */
     let organizationId = null;
 
@@ -43,21 +39,17 @@
     /** @type {boolean} */
     let pollingStarted = false;
 
-    /** @type {boolean} */
-    let isMinimized = false;
-
     /* --- Widget element refs --- */
     /** @type {HTMLElement|null} */ let widget = null;
-    /** @type {HTMLElement|null} */ let fiveHourRow = null;
-    /** @type {HTMLElement|null} */ let sevenDayRow = null;
-    /** @type {HTMLElement|null} */ let monthlySpendRow = null;
+    /** @type {HTMLElement|null} */ let fiveHourSectionEl = null;
+    /** @type {HTMLElement|null} */ let fiveHourValueEl = null;
+    /** @type {HTMLElement|null} */ let fiveHourCountdownEl = null;
+    /** @type {HTMLElement|null} */ let sevenDaySectionEl = null;
+    /** @type {HTMLElement|null} */ let sevenDayValueEl = null;
+    /** @type {HTMLElement|null} */ let sevenDayCountdownEl = null;
+    /** @type {HTMLElement|null} */ let monthlySectionEl = null;
+    /** @type {HTMLElement|null} */ let monthlyValueEl = null;
     /** @type {HTMLElement|null} */ let refreshButtonElement = null;
-    /** @type {HTMLElement|null} */ let minimizeButtonElement = null;
-    /** @type {HTMLElement|null} */ let buttonRowElement = null;
-    /** @type {HTMLElement|null} */ let miniHourValueElement = null;
-    /** @type {HTMLElement|null} */ let miniDayValueElement = null;
-    /** @type {HTMLElement|null} */ let miniHourRowElement = null;
-    /** @type {HTMLElement|null} */ let miniDayRowElement = null;
 
     /* ─────────────────────────── helpers ─────────────────────────── */
 
@@ -83,7 +75,7 @@
 
     /**
      * Formats a utilization percentage for display.
-     * @param {number|null|undefined} utilization - Utilization value (0–100).
+     * @param {number|null|undefined} utilization
      * @returns {string} e.g. "42%" or "--"
      */
     const formatPercent = (utilization) =>
@@ -92,7 +84,7 @@
             : '--';
 
     /**
-     * Formats a credit value (cents) as a dollar amount string (no sign).
+     * Formats a credit value (cents) as a dollar amount string.
      * @param {number|null|undefined} cents
      * @returns {string} e.g. "3.50" or "--"
      */
@@ -102,7 +94,7 @@
             : '--';
 
     /**
-     * Formats a reset timestamp string in local time as "YYYY-MM-DD HH:MM:SS ±HHMM".
+     * Formats a reset timestamp in local time as "YYYY-MM-DD HH:MM:SS ±HHMM".
      * @param {string|null|undefined} isoTimestamp
      * @returns {string}
      */
@@ -110,26 +102,110 @@
         if (!isoTimestamp) return '--';
         const date = new Date(isoTimestamp);
         if (isNaN(date.getTime())) return '--';
-        const zeroPad = (/** @type {number} */ number) => String(number).padStart(2, '0');
-        const timezoneOffsetMinutes = -date.getTimezoneOffset();
-        const offsetSign = timezoneOffsetMinutes >= 0 ? '+' : '-';
-        const absoluteOffsetMinutes = Math.abs(timezoneOffsetMinutes);
+        const zeroPad = (/** @type {number} */ n) => String(n).padStart(2, '0');
+        const offsetMinutes = -date.getTimezoneOffset();
+        const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+        const absOffset = Math.abs(offsetMinutes);
         return date.getFullYear() + '-' + zeroPad(date.getMonth() + 1) + '-' + zeroPad(date.getDate()) + ' ' +
             zeroPad(date.getHours()) + ':' + zeroPad(date.getMinutes()) + ':' + zeroPad(date.getSeconds()) + ' ' +
-            offsetSign + zeroPad(Math.floor(absoluteOffsetMinutes / 60)) + zeroPad(absoluteOffsetMinutes % 60);
+            offsetSign + zeroPad(Math.floor(absOffset / 60)) + zeroPad(absOffset % 60);
+    }
+
+    /**
+     * Returns how far through the current reset period we are, e.g. "62% through".
+     * @param {string|null|undefined} isoTimestamp - The period's resets_at timestamp.
+     * @param {number} periodMs - Total period duration in milliseconds.
+     * @returns {string}
+     */
+    function periodElapsed(isoTimestamp, periodMs) {
+        if (!isoTimestamp) return '--';
+        const resetDate = new Date(isoTimestamp);
+        if (isNaN(resetDate.getTime())) return '--';
+        const elapsed = Date.now() - (resetDate.getTime() - periodMs);
+        return Math.round(Math.max(0, Math.min(100, (elapsed / periodMs) * 100))) + '% through';
+    }
+
+    /**
+     * Returns a compact human-readable countdown to a reset timestamp (e.g. "5h12m", "2d6h").
+     * @param {string|null|undefined} isoTimestamp
+     * @returns {string}
+     */
+    function formatTimeUntilReset(isoTimestamp) {
+        if (!isoTimestamp) return '--';
+        const resetDate = new Date(isoTimestamp);
+        if (isNaN(resetDate.getTime())) return '--';
+        const diffMs = resetDate.getTime() - Date.now();
+        if (diffMs <= 0) return '0m';
+        const totalMinutes = Math.floor(diffMs / 60000);
+        const days = Math.floor(totalMinutes / (60 * 24));
+        const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+        const minutes = totalMinutes % 60;
+        if (days > 0) return `${days}d${hours}h`;
+        if (hours > 0) return `${hours}h${minutes}m`;
+        return `${minutes}m`;
     }
 
     /* ─────────────────────────── widget ─────────────────────────── */
 
     /**
-     * Injects minimal CSS and builds the widget DOM, then attaches it to body.
+     * Builds a period section element (label + value + optional countdown).
+     * @param {string} labelText
+     * @param {boolean} withCountdown
+     * @returns {{ section: HTMLElement, value: HTMLElement, countdown: HTMLElement|null }}
+     */
+    function makePeriodSection(labelText, withCountdown) {
+        const section = document.createElement('div');
+        section.className = 'period-section';
+
+        const label = document.createElement('div');
+        label.className = 'period-label';
+        label.textContent = labelText;
+
+        const divider = document.createElement('div');
+        divider.className = 'period-divider';
+
+        const value = document.createElement('div');
+        value.className = 'period-value';
+        value.textContent = '--';
+
+        section.append(label, divider, value);
+
+        let countdown = null;
+        if (withCountdown) {
+            countdown = document.createElement('div');
+            countdown.className = 'period-countdown';
+            countdown.textContent = '--';
+            section.appendChild(countdown);
+        }
+
+        return { section, value, countdown };
+    }
+
+    /**
+     * Injects CSS and builds the widget DOM, then attaches it to body.
      * @returns {void}
      */
     function createWidget() {
         const styleElement = document.createElement('style');
         styleElement.textContent = `
-        /* Widget container — fixed to the right edge, vertically centred */
         #claude-usage-panel {
+            --clr-bg:           rgba(20, 20, 20, 0.62);
+            --clr-pending-bg:   rgba(180, 140, 0, 0.6);
+            --clr-border:       rgba(255, 255, 255, 0.15);
+            --clr-border-hover: rgba(255, 255, 255, 0.32);
+            --clr-text:         rgba(255, 255, 255, 0.85);
+            --clr-label:        rgba(255, 255, 255, 0.75);
+            --clr-countdown:    rgba(209, 230, 255, 0.85);
+            --clr-sep-section:  rgba(255, 255, 255, 0.85);
+            --clr-sep-divider:  rgba(255, 255, 255, 0.42);
+            --clr-btn-bg:       rgba(255, 255, 255, 0.12);
+            --clr-btn-hover:    rgba(255, 255, 255, 0.26);
+            --clr-loading:      rgba(150, 150, 150, 0.55);
+            --clr-failed:       rgba(210, 200, 185, 0.80);
+            --clr-warn-5h:      rgba(255, 220,  60, 1);
+            --clr-warn-7d:      rgba(210, 155,  20, 1);
+            --clr-spend-over:   rgba(255, 175, 100, 1);
+
             position: fixed;
             right: 6px;
             top: 75%;
@@ -138,88 +214,80 @@
 
             display: flex;
             flex-direction: column;
+            align-items: center;
             gap: 5px;
-            padding: 9px 11px;
+            padding: 6px 6px;
             border-radius: 16px;
 
-            background: rgba(20, 20, 20, 0.52);
+            background: var(--clr-bg);
             backdrop-filter: blur(4px);
             -webkit-backdrop-filter: blur(4px);
-            border: 1px solid rgba(255, 255, 255, 0.15);
+            border: 1px solid var(--clr-border);
 
-            color: rgba(255, 255, 255, 0.88);
+            color: var(--clr-text);
             font: 600 15px / 1.4 monospace;
 
             user-select: none;
             cursor: default;
-            transition: background 0.3s, border-radius 0.3s, padding 0.3s;
+            transition: background 0.3s;
         }
 
-        /* Yellow tint while waiting for the org cookie to appear */
         #claude-usage-panel.pending-organization {
-            background: rgba(180, 140, 0, 0.6);
+            background: var(--clr-pending-bg);
         }
 
-        /* Minimized — compact column: labels, percentages, then the maximize button */
-        #claude-usage-panel.minimized {
-            padding: 6px 9px;
-            gap: 0;
-            align-items: center;
-            justify-content: center;
-        }
-
-        #claude-usage-panel.minimized .stat-row,
-        #claude-usage-panel.minimized #refresh-button {
-            display: none;
-        }
-
-        #claude-usage-panel.minimized #button-row {
-            gap: 0;
-            margin-top: 4px;
-        }
-
-        /* Fetch-state and usage-threshold colour feedback on the maximize button when minimized */
-        #claude-usage-panel.minimized #minimize-button {
-            transition: color 0.3s;
-        }
-        #claude-usage-panel.minimized #minimize-button.fetch-loading      { color: rgba(150, 150, 150, 0.55); }
-        #claude-usage-panel.minimized #minimize-button.fetch-failed        { color: rgba(210, 200, 185, 0.80); }
-        #claude-usage-panel.minimized #minimize-button.usage-warn-five-hour { color: rgba(255, 220,  60, 1); }
-        #claude-usage-panel.minimized #minimize-button.usage-warn-seven-day { color: rgba(210, 155,  20, 1); }
-
-        /* Slightly brighten border on hover */
         #claude-usage-panel:hover {
-            border-color: rgba(255, 255, 255, 0.32);
+            border-color: var(--clr-border-hover);
         }
 
-        /* Individual stat rows — prevent line-wrapping, smooth colour transitions */
-        .stat-row {
-            white-space: nowrap;
+        .period-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            line-height: 1.15;
+        }
+
+        .period-label {
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--clr-label);
+            padding-bottom: 2px;
+        }
+
+        /* Thin transparent line between label and values */
+        .period-divider {
+            align-self: stretch;
+            height: 1px;
+            background: var(--clr-sep-divider);
+            margin-bottom: 2px;
+        }
+
+        /* Thicker opaque line between sections */
+        .section-separator {
+            align-self: stretch;
+            height: 3px;
+            background: var(--clr-sep-section);
+        }
+
+        .period-value {
             transition: color 0.3s;
+            font-weight: normal;
         }
 
-        /* Fetch-state colour classes — applied to .stat-row elements */
-        .stat-row.fetch-loading  { color: rgba(150, 150, 150, 0.55); }
-        .stat-row.fetch-failed   { color: rgba(210, 200, 185, 0.80); }
-        .stat-row.spend-over-limit { color: rgba(255, 175, 100, 1);  }
+        .period-countdown {
+            font-size: 14px;
+            font-weight: normal;
+            color: var(--clr-countdown);
+            line-height: 1.2;
+        }
 
-        /* Usage-threshold colour classes — >75% 5H is yellow, >75% 7D is darker yellow */
-        .stat-row.usage-warn-five-hour { color: rgba(255, 220,  60, 1); }
-        .stat-row.usage-warn-seven-day { color: rgba(210, 155,  20, 1); }
+        .period-value.fetch-loading        { color: var(--clr-loading);    }
+        .period-value.fetch-failed         { color: var(--clr-failed);     }
+        .period-value.spend-over-limit     { color: var(--clr-spend-over); }
+        .period-value.usage-warn-five-hour { color: var(--clr-warn-5h);   }
+        .period-value.usage-warn-seven-day { color: var(--clr-warn-7d);   }
 
-        /* Mini stat display — visible only in minimized state */
-        .mini-row { display: none; flex-direction: column; align-items: center; text-align: center; line-height: 1.1; }
-        #claude-usage-panel.minimized .mini-row { display: flex; }
-        .mini-label { font-size: 10px; opacity: 0.65; }
-        .mini-value { font-size: 17px; font-weight: 700; line-height: 1.2; transition: color 0.3s; }
-        .mini-separator { display: none; height: 5px; }
-        #claude-usage-panel.minimized .mini-separator { display: block; }
-        .mini-value.fetch-loading { color: rgba(150, 150, 150, 0.55); }
-        .mini-value.fetch-failed  { color: rgba(210, 200, 185, 0.80); }
-        .mini-value.usage-warn-five-hour { color: rgba(255, 220,  60, 1); }
-        .mini-value.usage-warn-seven-day { color: rgba(210, 155,  20, 1); }
-
-        /* Shared button style — rounded rect with a slight background inversion */
         .panel-button {
             text-align: center;
             font-size: 17px;
@@ -227,22 +295,12 @@
             cursor: pointer;
             padding: 1px 6px;
             border-radius: 7px;
-            background: rgba(255, 255, 255, 0.12);
-            transition: background 0.2s, opacity 0.2s;
+            background: var(--clr-btn-bg);
+            transition: background 0.2s;
         }
 
         .panel-button:hover {
-            background: rgba(255, 255, 255, 0.26);
-        }
-
-        /* Button row — minimize and refresh sit side-by-side at the bottom */
-        #button-row {
-            display: flex;
-            flex-direction: row;
-            gap: 8px;
-            align-items: center;
-            justify-content: center;
-            margin-top: 1px;
+            background: var(--clr-btn-hover);
         }
     `;
         document.head.appendChild(styleElement);
@@ -250,93 +308,39 @@
         widget = document.createElement('div');
         widget.id = 'claude-usage-panel';
 
-        miniHourRowElement = document.createElement('div');
-        const miniFiveHourRow = miniHourRowElement;
-        miniFiveHourRow.className = 'mini-row';
-        const miniFiveHourLabel = document.createElement('div');
-        miniFiveHourLabel.className = 'mini-label';
-        miniFiveHourLabel.textContent = '5h';
-        miniHourValueElement = document.createElement('div');
-        miniHourValueElement.className = 'mini-value';
-        miniHourValueElement.textContent = '--';
-        miniFiveHourRow.append(miniFiveHourLabel, miniHourValueElement);
+        ({ section: fiveHourSectionEl, value: fiveHourValueEl, countdown: fiveHourCountdownEl } =
+            makePeriodSection('5h', true));
 
-        const miniSeparator = document.createElement('div');
-        miniSeparator.className = 'mini-separator';
+        ({ section: sevenDaySectionEl, value: sevenDayValueEl, countdown: sevenDayCountdownEl } =
+            makePeriodSection('7d', true));
 
-        miniDayRowElement = document.createElement('div');
-        const miniSevenDayRow = miniDayRowElement;
-        miniSevenDayRow.className = 'mini-row';
-        const miniSevenDayLabel = document.createElement('div');
-        miniSevenDayLabel.className = 'mini-label';
-        miniSevenDayLabel.textContent = '7d';
-        miniDayValueElement = document.createElement('div');
-        miniDayValueElement.className = 'mini-value';
-        miniDayValueElement.textContent = '--';
-        miniSevenDayRow.append(miniSevenDayLabel, miniDayValueElement);
-
-        fiveHourRow = document.createElement('div');
-        fiveHourRow.className = 'stat-row';
-        fiveHourRow.textContent = '5H: --';
-
-        sevenDayRow = document.createElement('div');
-        sevenDayRow.className = 'stat-row';
-        sevenDayRow.textContent = '7D: --';
-
-        monthlySpendRow = document.createElement('div');
-        monthlySpendRow.className = 'stat-row';
-        monthlySpendRow.textContent = 'M$: --';
+        ({ section: monthlySectionEl, value: monthlyValueEl } =
+            makePeriodSection('MS', false));
 
         refreshButtonElement = document.createElement('div');
         refreshButtonElement.id = 'refresh-button';
         refreshButtonElement.className = 'panel-button';
         refreshButtonElement.textContent = '\u21bb'; /* ↻ */
-        refreshButtonElement.addEventListener('click', (clickEvent) => { clickEvent.stopPropagation(); fetchStats(); });
+        refreshButtonElement.addEventListener('click', (e) => { e.stopPropagation(); fetchStats(); });
 
-        minimizeButtonElement = document.createElement('div');
-        minimizeButtonElement.id = 'minimize-button';
-        minimizeButtonElement.className = 'panel-button';
-        minimizeButtonElement.textContent = '\u2212'; /* − minus sign */
-        minimizeButtonElement.addEventListener('click', (clickEvent) => { clickEvent.stopPropagation(); toggleMinimized(); });
-        /* Middle-click on the minimized circle triggers a refresh */
-        minimizeButtonElement.addEventListener('auxclick', (mouseEvent) => {
-            if (mouseEvent.button === 1 && isMinimized) {
-                mouseEvent.preventDefault();
-                mouseEvent.stopPropagation();
-                fetchStats();
-            }
-        });
-
-        buttonRowElement = document.createElement('div');
-        buttonRowElement.id = 'button-row';
-        buttonRowElement.append(refreshButtonElement, minimizeButtonElement);
-
-        widget.append(miniFiveHourRow, miniSeparator, miniSevenDayRow, fiveHourRow, sevenDayRow, monthlySpendRow, buttonRowElement);
+        const makeSep = () => { const d = document.createElement('div'); d.className = 'section-separator'; return d; };
+        widget.append(fiveHourSectionEl, makeSep(), sevenDaySectionEl, makeSep(), monthlySectionEl, refreshButtonElement);
         document.body.appendChild(widget);
 
-        /* Restore saved vertical position, overriding the CSS translateY default */
+        /* Restore saved vertical position */
         const savedVerticalPosition = localStorage.getItem(POSITION_STORAGE_KEY);
         if (savedVerticalPosition) {
             widget.style.transform = 'none';
             widget.style.top = savedVerticalPosition;
         }
 
-        /* Restore saved minimized state */
-        if (localStorage.getItem(MINIMIZED_STORAGE_KEY) === '1') {
-            isMinimized = true;
-            widget.classList.add('minimized');
-            minimizeButtonElement.textContent = '\u25c9'; /* ◉ */
-        }
-
         setWidgetPending(true);
-        updateTitle();
         setFetchStatus('idle');
-        updateMinimizeButtonTitle();
         makeDraggable(widget);
     }
 
     /**
-     * Applies or removes the "pending org" yellow tint via CSS class.
+     * Applies or removes the "pending org" yellow tint.
      * @param {boolean} pending
      * @returns {void}
      */
@@ -346,126 +350,33 @@
     }
 
     /**
-     * Toggles the widget between minimized and expanded states.
-     * @returns {void}
-     */
-    function toggleMinimized() {
-        if (!widget || !minimizeButtonElement) return;
-        isMinimized = !isMinimized;
-        widget.classList.toggle('minimized', isMinimized);
-        localStorage.setItem(MINIMIZED_STORAGE_KEY, isMinimized ? '1' : '0');
-        updateMinimizeButtonTitle();
-        minimizeButtonElement.textContent = isMinimized
-            ? '\u25c9'   /* ◉ — shown when minimized, click to restore */
-            : '\u2212';  /* − minus sign — click to minimize */
-    }
-
-    /**
-     * Updates the widget's tooltip with the last-updated time.
-     * @returns {void}
-     */
-    function updateTitle() {
-        if (!widget) return;
-        widget.title = lastUpdated
-            ? 'Updated ' + lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-            : 'Not yet updated';
-    }
-
-    /**
-     * Rebuilds the minimize button's hover tooltip from current DOM state.
-     * Shows all stat values, their reset times, and the last refresh time.
-     * @returns {void}
-     */
-    function updateMinimizeButtonTitle() {
-        if (!minimizeButtonElement) return;
-        const fiveHourSummary = (fiveHourRow?.textContent ?? '--') +
-            (fiveHourRow?.title ? `  (${fiveHourRow.title})` : '');
-        const sevenDaySummary = (sevenDayRow?.textContent ?? '--') +
-            (sevenDayRow?.title ? `  (${sevenDayRow.title})` : '');
-        const monthlySpendSummary = (monthlySpendRow?.textContent ?? '--') +
-            (monthlySpendRow?.title ? `  (${monthlySpendRow.title})` : '');
-        const lastRefreshLine = lastUpdated
-            ? 'Last refresh: ' + formatResetTime(lastUpdated.toISOString())
-            : 'Last refresh: never';
-        const minimizedTooltip = isMinimized ? '(click to expand (middle-click to refresh))' : '(click to minimize)';
-        minimizeButtonElement.title = [
-            fiveHourSummary,
-            sevenDaySummary,
-            monthlySpendSummary,
-            lastRefreshLine,
-            minimizedTooltip
-        ].join('\n');
-    }
-
-    /**
-     * Updates stat row CSS classes and the refresh button tooltip to reflect fetch status.
-     * Row colour classes are mutually exclusive; 'ok' clears all so the caller can
-     * re-apply per-row overrides (e.g. spend-over-limit on the monthly row).
+     * Updates value element CSS classes and the refresh button tooltip to reflect fetch status.
      * @param {'idle'|'loading'|'ok'|'failed'} status
      * @returns {void}
      */
     function setFetchStatus(status) {
-        /* ── Row colour classes ── */
-        [fiveHourRow, sevenDayRow, monthlySpendRow].forEach(row => {
-            if (!row) return;
-            row.classList.remove('fetch-loading', 'fetch-failed', 'spend-over-limit');
-            if (status === 'loading') row.classList.add('fetch-loading');
-            if (status === 'failed') row.classList.add('fetch-failed');
-            /* usage-warn classes are applied separately in fetchStats; clear them on loading/failed */
-            if (status === 'loading' || status === 'failed') {
-                row.classList.remove('usage-warn-five-hour', 'usage-warn-seven-day');
-            }
-        });
-
-        /* ── Mini value colour — mirrors row state ── */
-        [miniHourValueElement, miniDayValueElement].forEach(el => {
+        [fiveHourValueEl, sevenDayValueEl, monthlyValueEl].forEach(el => {
             if (!el) return;
             el.classList.remove('fetch-loading', 'fetch-failed');
             if (status === 'loading') el.classList.add('fetch-loading');
-            if (status === 'failed') el.classList.add('fetch-failed');
+            if (status === 'failed')  el.classList.add('fetch-failed');
             if (status === 'loading' || status === 'failed') {
                 el.classList.remove('usage-warn-five-hour', 'usage-warn-seven-day');
             }
         });
 
-        /* ── Minimized button colour — mirrors row state (no spend-over-limit) ── */
-        if (minimizeButtonElement) {
-            minimizeButtonElement.classList.remove('fetch-loading', 'fetch-failed');
-            if (status === 'loading') minimizeButtonElement.classList.add('fetch-loading');
-            if (status === 'failed') minimizeButtonElement.classList.add('fetch-failed');
-            if (status === 'loading' || status === 'failed') {
-                minimizeButtonElement.classList.remove('usage-warn-five-hour', 'usage-warn-seven-day');
-            }
-        }
-
-        /* ── Refresh button tooltip ── */
         if (refreshButtonElement) {
             const lastRefreshLine = lastUpdated
                 ? 'Last refresh: ' + formatResetTime(lastUpdated.toISOString())
                 : 'Last refresh: never';
             const statusLine = {
-                idle: 'Status: not yet refreshed',
+                idle:    'Status: not yet refreshed',
                 loading: 'Status: loading\u2026',
-                ok: 'Status: OK',
-                failed: 'Status: failed',
+                ok:      'Status: OK',
+                failed:  'Status: failed',
             }[status] ?? 'Status: ' + status;
             refreshButtonElement.title = lastRefreshLine + '\n' + statusLine;
         }
-    }
-
-    /**
-     * Refreshes the text content of the three stat rows.
-     * @param {string} fiveHour - Formatted 5-hour utilization.
-     * @param {string} sevenDay - Formatted 7-day utilization.
-     * @param {string} monthlySpend - Formatted monthly spend.
-     * @returns {void}
-     */
-    function updateStatRows(fiveHour, sevenDay, monthlySpend) {
-        if (fiveHourRow) fiveHourRow.textContent = '5H: ' + fiveHour;
-        if (sevenDayRow) sevenDayRow.textContent = '7D: ' + sevenDay;
-        if (monthlySpendRow) monthlySpendRow.textContent = 'M$: ' + monthlySpend;
-        if (miniHourValueElement) miniHourValueElement.textContent = fiveHour.replace('%', '');
-        if (miniDayValueElement) miniDayValueElement.textContent = sevenDay.replace('%', '');
     }
 
     /**
@@ -475,25 +386,25 @@
      * @returns {void}
      */
     function makeDraggable(draggableElement) {
-    /** @type {number} */ let startY = 0;
-    /** @type {number} */ let startTop = 0;
-    /** @type {boolean} */ let active = false;
-    /** @type {boolean} */ let dragMoved = false;
+        /** @type {number} */ let startY = 0;
+        /** @type {number} */ let startTop = 0;
+        /** @type {boolean} */ let active = false;
+        /** @type {boolean} */ let dragMoved = false;
 
-        draggableElement.addEventListener('mousedown', (/** @type {MouseEvent} */ mouseEvent) => {
-            if (mouseEvent.button !== 0) return;
+        draggableElement.addEventListener('mousedown', (/** @type {MouseEvent} */ e) => {
+            if (e.button !== 0) return;
             active = true;
             dragMoved = false;
-            startY = mouseEvent.clientY;
+            startY = e.clientY;
             startTop = draggableElement.getBoundingClientRect().top;
             draggableElement.style.transform = 'none';
             draggableElement.style.top = startTop + 'px';
-            mouseEvent.preventDefault();
+            e.preventDefault();
         });
 
-        document.addEventListener('mousemove', (/** @type {MouseEvent} */ mouseEvent) => {
+        document.addEventListener('mousemove', (/** @type {MouseEvent} */ e) => {
             if (!active) return;
-            const deltaY = mouseEvent.clientY - startY;
+            const deltaY = e.clientY - startY;
             if (Math.abs(deltaY) > 4) dragMoved = true;
             const clampedTop = Math.max(0, Math.min(window.innerHeight - draggableElement.offsetHeight, startTop + deltaY));
             draggableElement.style.top = clampedTop + 'px';
@@ -504,12 +415,9 @@
             active = false;
         });
 
-        /* Suppress the click that fires after a drag — capture phase fires before children's listeners */
-        draggableElement.addEventListener('click', (clickEvent) => {
-            if (dragMoved) {
-                clickEvent.stopPropagation();
-                dragMoved = false;
-            }
+        /* Suppress the click that fires after a drag */
+        draggableElement.addEventListener('click', (e) => {
+            if (dragMoved) { e.stopPropagation(); dragMoved = false; }
         }, true);
     }
 
@@ -528,7 +436,6 @@
     async function fetchStats() {
         if (!organizationId) return;
         setFetchStatus('loading');
-        updateMinimizeButtonTitle();
         try {
             const response = await fetch(`https://claude.ai/api/organizations/${organizationId}/usage`, {
                 credentials: 'include',
@@ -549,53 +456,75 @@
                 mode: 'cors'
             });
             if (!response.ok) throw new Error('HTTP ' + response.status);
-            const usageData = /** @type {UsageData} */ (await response.json());
-            console.debug('[claude-ai-usage-widget] usage data:', usageData);
-            updateStatRows(
-                formatPercent(usageData?.five_hour?.utilization),
-                formatPercent(usageData?.seven_day?.utilization),
-                formatDollars(usageData?.extra_usage?.used_credits)
-            );
+            const data = /** @type {UsageData} */ (await response.json());
+            console.debug('[claude-ai-usage-widget] usage data:', data);
+
+            const fiveHourPct       = formatPercent(data?.five_hour?.utilization);
+            const sevenDayPct       = formatPercent(data?.seven_day?.utilization);
+            const fiveHourCountdown = formatTimeUntilReset(data?.five_hour?.resets_at);
+            const sevenDayCountdown = formatTimeUntilReset(data?.seven_day?.resets_at);
+            const fiveHourResetFull = formatResetTime(data?.five_hour?.resets_at);
+            const sevenDayResetFull = formatResetTime(data?.seven_day?.resets_at);
+
+            if (fiveHourValueEl)     fiveHourValueEl.textContent     = fiveHourPct;
+            if (fiveHourCountdownEl) fiveHourCountdownEl.textContent = fiveHourCountdown;
+            if (sevenDayValueEl)     sevenDayValueEl.textContent     = sevenDayPct;
+            if (sevenDayCountdownEl) sevenDayCountdownEl.textContent = sevenDayCountdown;
+
+            const extra = data?.extra_usage;
+            if (monthlyValueEl) monthlyValueEl.textContent = formatDollars(extra?.used_credits);
+
             lastUpdated = new Date();
-            updateTitle();
-            setFetchStatus('ok');   /* clears loading/failed classes on all rows */
+            setFetchStatus('ok');
 
-            /* Apply usage-threshold colours: >75% 5H → yellow; >75% 7D → darker yellow */
-            const fiveHourOver = (usageData?.five_hour?.utilization ?? 0) > 75;
-            const sevenDayOver = (usageData?.seven_day?.utilization ?? 0) > 75;
-            if (fiveHourRow) fiveHourRow.classList.toggle('usage-warn-five-hour', fiveHourOver);
-            if (sevenDayRow) sevenDayRow.classList.toggle('usage-warn-seven-day', sevenDayOver);
-            if (miniHourValueElement) miniHourValueElement.classList.toggle('usage-warn-five-hour', fiveHourOver);
-            if (miniDayValueElement) miniDayValueElement.classList.toggle('usage-warn-seven-day', sevenDayOver);
-            /* Minimized button shows the most severe active warning */
-            if (minimizeButtonElement) {
-                minimizeButtonElement.classList.toggle('usage-warn-seven-day', sevenDayOver);
-                minimizeButtonElement.classList.toggle('usage-warn-five-hour', fiveHourOver && !sevenDayOver);
-            }
+            /* Usage-threshold colours */
+            const fiveHourOver = (data?.five_hour?.utilization ?? 0) > 75;
+            const sevenDayOver = (data?.seven_day?.utilization ?? 0) > 75;
+            if (fiveHourValueEl) fiveHourValueEl.classList.toggle('usage-warn-five-hour', fiveHourOver);
+            if (sevenDayValueEl) sevenDayValueEl.classList.toggle('usage-warn-seven-day', sevenDayOver);
 
-            const fiveHourTitle = `resets: ${formatResetTime(usageData?.five_hour?.resets_at)}`;
-            const sevenDayTitle = `resets: ${formatResetTime(usageData?.seven_day?.resets_at)}`;
-            if (fiveHourRow) fiveHourRow.title = fiveHourTitle;
-            if (sevenDayRow) sevenDayRow.title = sevenDayTitle;
-            if (miniHourRowElement) miniHourRowElement.title = fiveHourTitle;
-            if (miniDayRowElement) miniDayRowElement.title = sevenDayTitle;
-            const extraUsage = usageData?.extra_usage;
-            if (monthlySpendRow && extraUsage) {
-                const formattedSpend = extraUsage.used_credits != null && isFinite(extraUsage.used_credits)
-                    ? '$' + (extraUsage.used_credits / 100).toFixed(2) : '--';
-                const formattedLimit = extraUsage.monthly_limit != null && isFinite(extraUsage.monthly_limit)
-                    ? '$' + (extraUsage.monthly_limit / 100).toFixed(2) : '--';
-                monthlySpendRow.title = formattedSpend + ' / ' + formattedLimit;
-                monthlySpendRow.classList.toggle(
+            /* Monthly spend-over-limit colour */
+            if (monthlyValueEl && extra) {
+                monthlyValueEl.classList.toggle(
                     'spend-over-limit',
-                    extraUsage.is_enabled && extraUsage.used_credits >= extraUsage.monthly_limit
+                    extra.is_enabled && extra.used_credits >= extra.monthly_limit
                 );
             }
-            updateMinimizeButtonTitle();   /* refresh with all data now populated */
+
+            /* Section tooltips */
+            const FH_MS = 5 * 60 * 60 * 1000;
+            const SD_MS = 7 * 24 * 60 * 60 * 1000;
+
+            if (fiveHourSectionEl) {
+                fiveHourSectionEl.title = [
+                    'usage:     ' + fiveHourPct,
+                    'resets in: ' + fiveHourCountdown,
+                    'resets at: ' + fiveHourResetFull,
+                    'elapsed:   ' + periodElapsed(data?.five_hour?.resets_at, FH_MS),
+                ].join('\n');
+            }
+            if (sevenDaySectionEl) {
+                const sevenDayDate = data?.seven_day?.resets_at ? new Date(data.seven_day.resets_at) : null;
+                const sevenDayOfWeek = (sevenDayDate && !isNaN(sevenDayDate.getTime()))
+                    ? sevenDayDate.toLocaleDateString([], { weekday: 'long' }) : '';
+                sevenDaySectionEl.title = [
+                    'usage:     ' + sevenDayPct,
+                    'resets in: ' + sevenDayCountdown,
+                    'resets at: ' + [sevenDayResetFull, sevenDayOfWeek].filter(Boolean).join(' '),
+                    'elapsed:   ' + periodElapsed(data?.seven_day?.resets_at, SD_MS),
+                ].join('\n');
+            }
+            if (monthlySectionEl && extra) {
+                const spendStr = extra.used_credits != null && isFinite(extra.used_credits)
+                    ? '$' + (extra.used_credits / 100).toFixed(2) : '--';
+                const limitStr = extra.monthly_limit != null && isFinite(extra.monthly_limit)
+                    ? '$' + (extra.monthly_limit / 100).toFixed(2) : '--';
+                monthlySectionEl.title = spendStr + ' / ' + limitStr;
+            }
+
         } catch (fetchError) {
             console.warn('[claude-ai-usage-widget] fetch failed:', fetchError);
             setFetchStatus('failed');
-            updateMinimizeButtonTitle();
         }
     }
 
@@ -611,14 +540,14 @@
         let debounceTimer = null;
 
         const observer = new MutationObserver((mutations) => {
-            if (mutations.some((mutation) => mutation.addedNodes.length > 0)) hideWarning();
+            if (mutations.some((m) => m.addedNodes.length > 0)) hideWarning();
 
             if (!organizationId) {
                 if (debounceTimer) clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
-                    const foundOrganizationId = findOrganizationId();
-                    if (!foundOrganizationId) return;
-                    organizationId = foundOrganizationId;
+                    const foundId = findOrganizationId();
+                    if (!foundId) return;
+                    organizationId = foundId;
                     setWidgetPending(false);
                     if (!pollingStarted) {
                         pollingStarted = true;
@@ -641,9 +570,9 @@
         createWidget();
         hideWarning();
 
-        const foundOrganizationId = findOrganizationId();
-        if (foundOrganizationId) {
-            organizationId = foundOrganizationId;
+        const foundId = findOrganizationId();
+        if (foundId) {
+            organizationId = foundId;
             setWidgetPending(false);
             pollingStarted = true;
             fetchStats();
