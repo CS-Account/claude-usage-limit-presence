@@ -4,11 +4,11 @@ A Tampermonkey userscript for [claude.ai](https://claude.ai) that displays a flo
 
 ## Features
 
-- **Floating widget** — compact, draggable capsule pinned to the right edge showing 5-hour, 7-day, and monthly spend usage
-- **Auto-refresh** — polls the usage API every 10 minutes; manual refresh button available
+- **Floating widget** — slim vertical panel pinned to the right edge showing 5-hour, 7-day, and monthly spend usage
+- **Auto-refresh** — polls the usage API every 2 minutes; manual refresh button available
 - **Warning suppression** — hides the "You've used 75% of your limit" banner in the chat box
-- **Visual feedback** — widget tints yellow when approaching limits; colour-coded fetch states
-- **Minimizable** — collapses to a small circle; middle-click the circle to refresh
+- **Visual feedback** — values tint yellow when approaching limits; colour-coded fetch states
+- **Tooltips** — hover each section for usage %, time till reset, full reset datetime, and elapsed % through the period
 
 ## Installation
 
@@ -19,16 +19,24 @@ A Tampermonkey userscript for [claude.ai](https://claude.ai) that displays a flo
 ## Widget
 
 ```
-5H: 12%
-7D: 43%
-M$: 1.20
-  ↻ −
+ 5h
+ 42%
+ 5h12m
+─────
+ 7d
+ 61%
+ 2d6h
+─────
+ MS
+ 3.50
+  ↻
 ```
 
-- `5H` — 5-hour utilization
-- `7D` — 7-day utilization
-- `M$` — monthly extra-usage spend (dollars)
-- Hover the widget for last-updated time and reset timestamps
+- `5h` — 5-hour utilization, with countdown to reset
+- `7d` — 7-day utilization, with countdown to reset
+- `MS` — monthly extra-usage spend in dollars
+- Hover a section for: usage %, time till reset, full reset datetime (7d includes weekday), and elapsed % through the period
+- Hover the refresh button for last refresh time and fetch status
 - Drag vertically to reposition (persisted across page loads)
 
 ## Development
