@@ -22,14 +22,17 @@
         "//span[contains(., '% of your') and contains(., 'limit')]" +
         "/ancestor::div[contains(@class,'px-3') and contains(@class,'md:px-2')]";
 
-    /** Auto-refresh interval (10 min). @type {number} */
-    const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+    /** Auto-refresh interval (2 min). @type {number} */
+    const REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 
     /** Debounce delay for org-ID search after page mutations (ms). @type {number} */
     const DEBOUNCE_DELAY_MS = 500;
 
     /** localStorage key for persisting the widget's vertical position. @type {string} */
     const POSITION_STORAGE_KEY = 'claude-usage-panel-vertical-position-px';
+
+    /** localStorage key for persisting the widget's minimized state. @type {string} */
+    const MINIMIZED_STORAGE_KEY = 'claude-usage-panel-minimized';
 
     /** @type {string|null} */
     let organizationId = null;
@@ -297,6 +300,13 @@
             widget.style.top = savedVerticalPosition;
         }
 
+        /* Restore saved minimized state */
+        if (localStorage.getItem(MINIMIZED_STORAGE_KEY) === '1') {
+            isMinimized = true;
+            widget.classList.add('minimized');
+            minimizeButtonElement.textContent = '\u25c9'; /* ◉ */
+        }
+
         setWidgetPending(true);
         updateTitle();
         setFetchStatus('idle');
@@ -322,6 +332,7 @@
         if (!widget || !minimizeButtonElement) return;
         isMinimized = !isMinimized;
         widget.classList.toggle('minimized', isMinimized);
+        localStorage.setItem(MINIMIZED_STORAGE_KEY, isMinimized ? '1' : '0');
         updateMinimizeButtonTitle();
         minimizeButtonElement.textContent = isMinimized
             ? '\u25c9'   /* ◉ — shown when minimized, click to restore */
