@@ -30,6 +30,10 @@
     /** localStorage key for persisting the widget's vertical position. @type {string} */
     const POSITION_STORAGE_KEY = 'claude-usage-panel-vertical-position-px';
 
+    /** CSS class names for the two themes. @type {string} */
+    const DARK_CLASS  = 'claude-ai-usage-widget--dark';
+    const LIGHT_CLASS = 'claude-ai-usage-widget--light';
+
     /** @type {string|null} */
     let organizationId = null;
 
@@ -207,24 +211,83 @@
     function createWidget() {
         const styleElement = document.createElement('style');
         styleElement.textContent = `
-        #claude-usage-panel {
-            --clr-bg:           rgba(20, 20, 20, 0.62);
-            --clr-pending-bg:   rgba(180, 140, 0, 0.6);
-            --clr-border:       rgba(255, 255, 255, 0.15);
-            --clr-border-hover: rgba(255, 255, 255, 0.32);
-            --clr-text:         rgba(255, 255, 255, 0.85);
-            --clr-label:        rgba(255, 255, 255, 0.75);
-            --clr-countdown:    rgba(209, 230, 255, 0.85);
-            --clr-sep-section:  rgba(255, 255, 255, 0.85);
-            --clr-sep-divider:  rgba(255, 255, 255, 0.42);
-            --clr-btn-bg:       rgba(255, 255, 255, 0.12);
-            --clr-btn-hover:    rgba(255, 255, 255, 0.26);
-            --clr-loading:      rgba(150, 150, 150, 0.55);
-            --clr-failed:       rgba(210, 200, 185, 0.80);
-            --clr-warn-5h:      rgba(255, 220,  60, 1);
-            --clr-warn-7d:      rgba(210, 155,  20, 1);
-            --clr-spend-over:   rgba(255, 175, 100, 1);
+        :root {
+            /* ── Dark theme ── */
+            --claude-ai-usage-widget--dark--bg:           rgba(20, 20, 20, 0.62);
+            --claude-ai-usage-widget--dark--pending-bg:   rgba(180, 140, 0, 0.6);
+            --claude-ai-usage-widget--dark--border:       rgba(255, 255, 255, 0.15);
+            --claude-ai-usage-widget--dark--border-hover: rgba(255, 255, 255, 0.32);
+            --claude-ai-usage-widget--dark--text:         rgba(255, 255, 255, 0.85);
+            --claude-ai-usage-widget--dark--label:        rgba(255, 255, 255, 0.75);
+            --claude-ai-usage-widget--dark--countdown:    rgba(209, 230, 255, 0.85);
+            --claude-ai-usage-widget--dark--sep-section:  rgba(255, 255, 255, 0.85);
+            --claude-ai-usage-widget--dark--sep-divider:  rgba(255, 255, 255, 0.42);
+            --claude-ai-usage-widget--dark--btn-bg:       rgba(255, 255, 255, 0.12);
+            --claude-ai-usage-widget--dark--btn-hover:    rgba(255, 255, 255, 0.26);
+            --claude-ai-usage-widget--dark--loading:      rgba(150, 150, 150, 0.55);
+            --claude-ai-usage-widget--dark--failed:       rgba(210, 200, 185, 0.80);
+            --claude-ai-usage-widget--dark--warn-5h:      rgba(255, 220,  60, 1);
+            --claude-ai-usage-widget--dark--warn-7d:      rgba(210, 155,  20, 1);
+            --claude-ai-usage-widget--dark--spend-over:   rgba(255, 175, 100, 1);
 
+            /* ── Light theme ── */
+            --claude-ai-usage-widget--light--bg:           rgba(225, 222, 210, 0.88);
+            --claude-ai-usage-widget--light--pending-bg:   rgba(160, 120, 0, 0.5);
+            --claude-ai-usage-widget--light--border:       rgba(0, 0, 0, 0.15);
+            --claude-ai-usage-widget--light--border-hover: rgba(0, 0, 0, 0.32);
+            --claude-ai-usage-widget--light--text:         rgba(20, 20, 20, 0.90);
+            --claude-ai-usage-widget--light--label:        rgba(20, 20, 20, 0.70);
+            --claude-ai-usage-widget--light--countdown:    rgba(30, 80, 160, 0.85);
+            --claude-ai-usage-widget--light--sep-section:  rgba(20, 20, 20, 0.65);
+            --claude-ai-usage-widget--light--sep-divider:  rgba(20, 20, 20, 0.25);
+            --claude-ai-usage-widget--light--btn-bg:       rgba(0, 0, 0, 0.08);
+            --claude-ai-usage-widget--light--btn-hover:    rgba(0, 0, 0, 0.18);
+            --claude-ai-usage-widget--light--loading:      rgba(100, 100, 100, 0.60);
+            --claude-ai-usage-widget--light--failed:       rgba(90, 80, 65, 0.80);
+            --claude-ai-usage-widget--light--warn-5h:      rgba(180, 135, 0, 1);
+            --claude-ai-usage-widget--light--warn-7d:      rgba(155, 100, 0, 1);
+            --claude-ai-usage-widget--light--spend-over:   rgba(200, 100, 20, 1);
+        }
+
+        #claude-usage-panel.claude-ai-usage-widget--dark {
+            --clr-bg:           var(--claude-ai-usage-widget--dark--bg);
+            --clr-pending-bg:   var(--claude-ai-usage-widget--dark--pending-bg);
+            --clr-border:       var(--claude-ai-usage-widget--dark--border);
+            --clr-border-hover: var(--claude-ai-usage-widget--dark--border-hover);
+            --clr-text:         var(--claude-ai-usage-widget--dark--text);
+            --clr-label:        var(--claude-ai-usage-widget--dark--label);
+            --clr-countdown:    var(--claude-ai-usage-widget--dark--countdown);
+            --clr-sep-section:  var(--claude-ai-usage-widget--dark--sep-section);
+            --clr-sep-divider:  var(--claude-ai-usage-widget--dark--sep-divider);
+            --clr-btn-bg:       var(--claude-ai-usage-widget--dark--btn-bg);
+            --clr-btn-hover:    var(--claude-ai-usage-widget--dark--btn-hover);
+            --clr-loading:      var(--claude-ai-usage-widget--dark--loading);
+            --clr-failed:       var(--claude-ai-usage-widget--dark--failed);
+            --clr-warn-5h:      var(--claude-ai-usage-widget--dark--warn-5h);
+            --clr-warn-7d:      var(--claude-ai-usage-widget--dark--warn-7d);
+            --clr-spend-over:   var(--claude-ai-usage-widget--dark--spend-over);
+        }
+
+        #claude-usage-panel.claude-ai-usage-widget--light {
+            --clr-bg:           var(--claude-ai-usage-widget--light--bg);
+            --clr-pending-bg:   var(--claude-ai-usage-widget--light--pending-bg);
+            --clr-border:       var(--claude-ai-usage-widget--light--border);
+            --clr-border-hover: var(--claude-ai-usage-widget--light--border-hover);
+            --clr-text:         var(--claude-ai-usage-widget--light--text);
+            --clr-label:        var(--claude-ai-usage-widget--light--label);
+            --clr-countdown:    var(--claude-ai-usage-widget--light--countdown);
+            --clr-sep-section:  var(--claude-ai-usage-widget--light--sep-section);
+            --clr-sep-divider:  var(--claude-ai-usage-widget--light--sep-divider);
+            --clr-btn-bg:       var(--claude-ai-usage-widget--light--btn-bg);
+            --clr-btn-hover:    var(--claude-ai-usage-widget--light--btn-hover);
+            --clr-loading:      var(--claude-ai-usage-widget--light--loading);
+            --clr-failed:       var(--claude-ai-usage-widget--light--failed);
+            --clr-warn-5h:      var(--claude-ai-usage-widget--light--warn-5h);
+            --clr-warn-7d:      var(--claude-ai-usage-widget--light--warn-7d);
+            --clr-spend-over:   var(--claude-ai-usage-widget--light--spend-over);
+        }
+
+        #claude-usage-panel {
             position: fixed;
             right: 6px;
             top: 75%;
@@ -354,12 +417,24 @@
             clampWidgetPosition();
         }
 
+        applyTheme();
         setWidgetPending(true);
         setFetchStatus('idle');
         makeDraggable(widget);
 
         /* Keep widget fully on-screen when the viewport shrinks (e.g. DevTools opens) */
         window.addEventListener('resize', clampWidgetPosition);
+    }
+
+    /**
+     * Reads html[data-mode] and applies the matching theme class to the widget.
+     * @returns {void}
+     */
+    function applyTheme() {
+        if (!widget) return;
+        const mode = document.documentElement.getAttribute('data-mode');
+        widget.classList.toggle(DARK_CLASS,  mode !== 'light');
+        widget.classList.toggle(LIGHT_CLASS, mode === 'light');
     }
 
     /**
@@ -585,6 +660,17 @@
     }
 
     /**
+     * Watches html[data-mode] for changes and re-applies the theme class on the widget.
+     * @returns {void}
+     */
+    function startThemeObserver() {
+        new MutationObserver(() => applyTheme()).observe(
+            document.documentElement,
+            { attributes: true, attributeFilter: ['data-mode'] }
+        );
+    }
+
+    /**
      * Entry point: creates the widget, hides any existing warning, and starts observing.
      * @returns {void}
      */
@@ -603,6 +689,7 @@
         }
 
         startObserver();
+        startThemeObserver();
     }
 
     if (document.readyState === 'loading') {
