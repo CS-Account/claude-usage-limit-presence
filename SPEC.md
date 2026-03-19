@@ -61,26 +61,14 @@ The chat box ui element we do not want is
 
 We will find the element with it's text content using xpath and the closest div with the class `px-3 md:px-2` and set it's display to none.
 
-### Usage Stats Endpoint
-
-Using a mutation observer to wait until nothing has been added to the page for more than 500ms, we need to first find the organization of the user.
-
-While the organization is not found, our widget has a pastel yellow tint.
-
-We use the following snippet to find the organization ID from the page.
-
-```js
-const orgId = /lastActiveOrg.{1,10}value.{1,10}([a-z0-9]{4,}(?:-[a-z0-9]{4,}){4})/gim.exec(document.body.innerHTML)?.[1]
-```
-
-The usage stats endpoint is therefore "const usageStatsEndpoint = `https://claude.ai/api/organizations/${orgId}/usage`"
+### Fetch Example
 
 Only use the likely to be required headers, and the endpoint itself.
 
 For `Accept-Language` and `User-Agent`, use the same as the users retrieved from built-in js features.
 
 ```js
-await fetch(usageStatsEndpoint, {
+await fetch(endpoint, {
     "credentials": "include",
     "headers": {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
@@ -100,7 +88,25 @@ await fetch(usageStatsEndpoint, {
 });
 ```
 
-#### Response
+### Usage Stats Endpoints
+
+Using a mutation observer to wait until nothing has been added to the page for more than 500ms, we need to first find the organization of the user.
+
+While the organization is not found, our widget has a pastel yellow tint.
+
+The organization ID is read directly from the `lastActiveOrg` cookie set by claude.ai.
+
+```js
+const orgId = document.cookie.split('; ').find(c => c.startsWith('lastActiveOrg='))?.split('=')[1] ?? null;
+```
+
+#### Usage Stats
+
+```js
+const usageStatsEndpoint = `https://claude.ai/api/organizations/${orgId}/usage`;
+```
+
+##### Response
 
 Example response:
 
@@ -121,9 +127,51 @@ Example response:
     "iguana_necktie": null,
     "extra_usage": {
         "is_enabled": true,
-        "monthly_limit": 800, // cents (so this is $8.00)
+        "monthly_limit": 1450, // cents (so this is $14.50)
         "used_credits": 0.0,
         "utilization": null
     }
+}
+```
+
+#### Overage Spend Limit
+
+This endpoint returns the organization's monthly overage spend cap, current usage, and whether the account has been disabled for exceeding the limit.
+
+```js
+const overageSpendLimitEndpoint = `https://claude.ai/api/organizations/${orgId}/overage_spend_limit`;
+```
+
+##### Response
+
+Fields of interest: `is_enabled`, `monthly_credit_limit`, `currency`, `used_credits`, `disabled_until`.
+
+Example response:
+
+```json
+{
+    "organization_uuid": "...",
+    "limit_type": "organization",
+    "seat_tier": null,
+    "account_uuid": null,
+    "account_email": null,
+    "account_name": null,
+    "group_uuid": null,
+    "group_name": null,
+    "group_deleted": null,
+    "org_service_name": null,
+    "is_enabled": true,                          // whether the overage spend feature is turned on at all
+    "monthly_credit_limit": 6000,               // cents (so this is $60.00)
+    "currency": "CAD",
+    "used_credits": 6230,                       // cents consumed this month; here slightly over limit
+    "disabled_reason": "self_selected_spend_limit_reached", // null if not over limit
+    "disabled_until": "2026-05-01T00:00:00Z",   // null if overage is enabled and cap not yet reached or if overages are not enabled; otherwise start of next billing month.
+    "out_of_credits": false,
+    "discount_percent": null,
+    "discount_ends_at": null,
+    "resolved_group_limit": null,
+    "settings": null,
+    "created_at": "2026-01-15T14:22:31.641203Z",
+    "updated_at": "2026-03-17T09:42:18.877641Z"
 }
 ```

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude AI Usage Widget
 // @namespace    claude-ai-usage-widget
-// @version      0.2.0
+// @version      0.3.0
 // @description  Floating usage stats widget for claude.ai; suppresses the chat-box usage warning.
 // @author       CS-Account
 // @match        https://claude.ai/*
@@ -27,12 +27,12 @@
     /** Debounce delay for org-ID search after page mutations (ms). @type {number} */
     const DEBOUNCE_DELAY_MS = 500;
 
-    /** localStorage key for persisting the widget's vertical position. @type {string} */
-    const POSITION_STORAGE_KEY = 'claude-usage-panel-vertical-position-px';
+    /** localStorage key for persisting widget state (position + mode). @type {string} */
+    const STATE_STORAGE_KEY = 'claude-usage-panel-state';
 
     /** CSS class names for the two themes. @type {string} */
-    const DARK_CLASS  = 'claude-ai-usage-widget--dark';
-    const LIGHT_CLASS = 'claude-ai-usage-widget--light';
+    const DARK_CLASS  = 'theme-dark';
+    const LIGHT_CLASS = 'theme-light';
 
     /** @type {string|null} */
     let organizationId = null;
@@ -43,6 +43,15 @@
     /** @type {boolean} */
     let pollingStarted = false;
 
+    /**
+     * Persisted widget state.
+     * @type {{ verticalPositionPx: number|null, horizontalPositionPx: number|null, mode: string }}
+     */
+    let state = { verticalPositionPx: null, horizontalPositionPx: null, mode: 'vertical' };
+
+    /** @type {string} */
+    let currentMode = 'vertical';
+
     /* --- Widget element refs --- */
     /** @type {HTMLElement|null} */ let widget = null;
     /** @type {HTMLElement|null} */ let fiveHourSectionEl = null;
@@ -52,8 +61,11 @@
     /** @type {HTMLElement|null} */ let sevenDayValueEl = null;
     /** @type {HTMLElement|null} */ let sevenDayCountdownEl = null;
     /** @type {HTMLElement|null} */ let monthlySectionEl = null;
+    /** @type {HTMLElement|null} */ let monthlyLabelEl = null;
     /** @type {HTMLElement|null} */ let monthlyValueEl = null;
+    /** @type {HTMLElement|null} */ let monthlyUtilEl = null;
     /** @type {HTMLElement|null} */ let refreshButtonElement = null;
+    /** @type {HTMLElement|null} */ let modeButtonElement = null;
 
     /* ─────────────────────────── helpers ─────────────────────────── */
 
@@ -149,13 +161,53 @@
         return `${minutes}m`;
     }
 
+    /**
+     * Computes an HSL colour for the monthly spend value, interpolating from green (0%) to orange (100%).
+     * Accounts for the active theme. Clamps utilization to [0, 100].
+     * @param {number} utilization - 0–100
+     * @returns {string} CSS hsl() string
+     */
+    function monthlySpendColor(utilization) {
+        const t = Math.max(0, Math.min(1, utilization / 100));
+        const isLight = document.documentElement.getAttribute('data-mode') === 'light';
+        const h = Math.round(145 + (28 - 145) * t); /* green(145) → orange(28) */
+        if (isLight) {
+            const s = Math.round(40 + (75 - 40) * t);
+            const l = Math.round(36 + (43 - 36) * t);
+            return `hsl(${h}, ${s}%, ${l}%)`;
+        }
+        const s = Math.round(50 + (90 - 50) * t);
+        const l = Math.round(42 + (65 - 42) * t);
+        return `hsl(${h}, ${s}%, ${l}%)`;
+    }
+
+    /**
+     * Loads widget state from localStorage, with defaults.
+     * @returns {{ verticalPositionPx: number|null, horizontalPositionPx: number|null, mode: string }}
+     */
+    function loadState() {
+        try {
+            const raw = localStorage.getItem(STATE_STORAGE_KEY);
+            if (raw) return Object.assign({ verticalPositionPx: null, horizontalPositionPx: null, mode: 'vertical' }, JSON.parse(raw));
+        } catch {}
+        return { verticalPositionPx: null, horizontalPositionPx: null, mode: 'vertical' };
+    }
+
+    /**
+     * Persists the current state object to localStorage.
+     * @returns {void}
+     */
+    function saveState() {
+        localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(state));
+    }
+
     /* ─────────────────────────── widget ─────────────────────────── */
 
     /**
      * Builds a period section element (label + value + optional countdown).
      * @param {string} labelText
      * @param {boolean} withCountdown
-     * @returns {{ section: HTMLElement, value: HTMLElement, countdown: HTMLElement|null }}
+     * @returns {{ section: HTMLElement, label: HTMLElement, value: HTMLElement, countdown: HTMLElement|null }}
      */
     function makePeriodSection(labelText, withCountdown) {
         const section = document.createElement('div');
@@ -169,39 +221,98 @@
         divider.className = 'period-divider';
 
         const value = document.createElement('div');
-        value.className = 'period-value';
+        value.className = 'period-primary';
         value.textContent = '--';
 
         section.append(label, divider, value);
 
-        let countdown = null;
-        if (withCountdown) {
-            countdown = document.createElement('div');
-            countdown.className = 'period-countdown';
-            countdown.textContent = '--';
-            section.appendChild(countdown);
-        }
+        const countdown = document.createElement('div');
+        countdown.className = withCountdown ? 'period-secondary' : 'period-secondary period-secondary--spacer';
+        countdown.textContent = withCountdown ? '--' : '\u00a0'; /* nbsp holds line height */
+        section.appendChild(countdown);
 
-        return { section, value, countdown };
+        return { section, label, value, countdown: withCountdown ? countdown : null };
     }
 
     /**
      * Clamps the widget so it stays fully within the current viewport.
-     * Only applies when the widget has an explicit pixel `top` (i.e. after drag or restore).
+     * In vertical mode clamps top; in horizontal mode clamps left.
+     * Only applies when the widget has an explicit pixel position (i.e. after drag or restore).
      * @returns {void}
      */
     function clampWidgetPosition() {
         if (!widget) return;
-        /* If still using the CSS % default, nothing to clamp */
-        if (!widget.style.top || widget.style.top === '') return;
-        const currentTop = parseFloat(widget.style.top);
-        if (isNaN(currentTop)) return;
-        const maxTop = window.innerHeight - widget.offsetHeight;
-        const clampedTop = Math.max(0, Math.min(maxTop, currentTop));
-        if (clampedTop !== currentTop) {
-            widget.style.top = clampedTop + 'px';
-            localStorage.setItem(POSITION_STORAGE_KEY, widget.style.top);
+        if (currentMode === 'horizontal') {
+            if (!widget.style.left || widget.style.left.endsWith('%')) return;
+            const currentLeft = parseFloat(widget.style.left);
+            if (isNaN(currentLeft)) return;
+            const maxLeft = window.innerWidth - widget.offsetWidth;
+            const clamped = Math.max(0, Math.min(maxLeft, currentLeft));
+            if (clamped !== currentLeft) {
+                widget.style.left = clamped + 'px';
+                state.horizontalPositionPx = clamped;
+                saveState();
+            }
+        } else {
+            if (!widget.style.top || widget.style.top.endsWith('%')) return;
+            const currentTop = parseFloat(widget.style.top);
+            if (isNaN(currentTop)) return;
+            const maxTop = window.innerHeight - widget.offsetHeight;
+            const clamped = Math.max(0, Math.min(maxTop, currentTop));
+            if (clamped !== currentTop) {
+                widget.style.top = clamped + 'px';
+                state.verticalPositionPx = clamped;
+                saveState();
+            }
         }
+    }
+
+    /**
+     * Applies a layout mode ('vertical' or 'horizontal'), repositioning the widget
+     * and updating the mode button icon.
+     * @param {string} newMode
+     * @returns {void}
+     */
+    function applyMode(newMode) {
+        if (!widget) return;
+        currentMode = newMode;
+        state.mode = newMode;
+        widget.classList.toggle('mode-horizontal', newMode === 'horizontal');
+
+        if (newMode === 'horizontal') {
+            widget.style.right = 'auto';
+            widget.style.top = '6px';
+            if (state.horizontalPositionPx != null) {
+                widget.style.left = state.horizontalPositionPx + 'px';
+                widget.style.transform = 'none';
+            } else {
+                widget.style.left = '50%';
+                widget.style.transform = 'translateX(-50%)';
+            }
+            if (modeButtonElement) modeButtonElement.textContent = '\u2195'; /* ↕ */
+        } else {
+            widget.style.left = 'auto';
+            widget.style.right = '6px';
+            if (state.verticalPositionPx != null) {
+                widget.style.top = state.verticalPositionPx + 'px';
+                widget.style.transform = 'none';
+            } else {
+                widget.style.top = '75%';
+                widget.style.transform = 'translateY(-50%)';
+            }
+            if (modeButtonElement) modeButtonElement.textContent = '\u2194'; /* ↔ */
+        }
+
+        saveState();
+        clampWidgetPosition();
+    }
+
+    /**
+     * Toggles between 'vertical' and 'horizontal' modes.
+     * @returns {void}
+     */
+    function toggleMode() {
+        applyMode(currentMode === 'horizontal' ? 'vertical' : 'horizontal');
     }
 
     /**
@@ -209,85 +320,41 @@
      * @returns {void}
      */
     function createWidget() {
+        widget = document.createElement('div');
+        widget.id = 'claude-usage-panel';
+        const shadow = widget.attachShadow({ mode: 'open' });
+
         const styleElement = document.createElement('style');
         styleElement.textContent = `
-        :root {
-            /* ── Dark theme ── */
-            --claude-ai-usage-widget--dark--bg:           rgba(20, 20, 20, 0.62);
-            --claude-ai-usage-widget--dark--pending-bg:   rgba(180, 140, 0, 0.6);
-            --claude-ai-usage-widget--dark--border:       rgba(255, 255, 255, 0.15);
-            --claude-ai-usage-widget--dark--border-hover: rgba(255, 255, 255, 0.32);
-            --claude-ai-usage-widget--dark--text:         rgba(255, 255, 255, 0.85);
-            --claude-ai-usage-widget--dark--label:        rgba(255, 255, 255, 0.75);
-            --claude-ai-usage-widget--dark--countdown:    rgba(209, 230, 255, 0.85);
-            --claude-ai-usage-widget--dark--sep-section:  rgba(255, 255, 255, 0.85);
-            --claude-ai-usage-widget--dark--sep-divider:  rgba(255, 255, 255, 0.42);
-            --claude-ai-usage-widget--dark--btn-bg:       rgba(255, 255, 255, 0.12);
-            --claude-ai-usage-widget--dark--btn-hover:    rgba(255, 255, 255, 0.26);
-            --claude-ai-usage-widget--dark--loading:      rgba(150, 150, 150, 0.55);
-            --claude-ai-usage-widget--dark--failed:       rgba(210, 200, 185, 0.80);
-            --claude-ai-usage-widget--dark--warn-5h:      rgba(255, 220,  60, 1);
-            --claude-ai-usage-widget--dark--warn-7d:      rgba(210, 155,  20, 1);
-            --claude-ai-usage-widget--dark--spend-over:   rgba(255, 175, 100, 1);
+        /* ── Variables + host layout (dark theme is default) ── */
+        :host {
+            --sep-thickness: 2px;
+            --item-gap:      4px;
+            --font-sm:       14px;
+            --font-md:       15px;
+            --font-lg:       17px;
+            --divider-gap:   2px;
 
-            /* ── Light theme ── */
-            --claude-ai-usage-widget--light--bg:           rgba(225, 222, 210, 0.88);
-            --claude-ai-usage-widget--light--pending-bg:   rgba(160, 120, 0, 0.5);
-            --claude-ai-usage-widget--light--border:       rgba(0, 0, 0, 0.15);
-            --claude-ai-usage-widget--light--border-hover: rgba(0, 0, 0, 0.32);
-            --claude-ai-usage-widget--light--text:         rgba(20, 20, 20, 0.90);
-            --claude-ai-usage-widget--light--label:        rgba(20, 20, 20, 0.70);
-            --claude-ai-usage-widget--light--countdown:    rgba(30, 80, 160, 0.85);
-            --claude-ai-usage-widget--light--sep-section:  rgba(20, 20, 20, 0.65);
-            --claude-ai-usage-widget--light--sep-divider:  rgba(20, 20, 20, 0.25);
-            --claude-ai-usage-widget--light--btn-bg:       rgba(0, 0, 0, 0.08);
-            --claude-ai-usage-widget--light--btn-hover:    rgba(0, 0, 0, 0.18);
-            --claude-ai-usage-widget--light--loading:      rgba(100, 100, 100, 0.60);
-            --claude-ai-usage-widget--light--failed:       rgba(90, 80, 65, 0.80);
-            --claude-ai-usage-widget--light--warn-5h:      rgba(180, 135, 0, 1);
-            --claude-ai-usage-widget--light--warn-7d:      rgba(155, 100, 0, 1);
-            --claude-ai-usage-widget--light--spend-over:   rgba(200, 100, 20, 1);
-        }
+            --clr-bg:           rgba(20, 20, 20, 0.6);
+            --clr-pending-bg:   rgba(180, 140, 0, 0.6);
+            --clr-border:       rgba(255, 255, 255, 0.15);
+            --clr-border-hover: rgba(255, 255, 255, 0.32);
+            --clr-text:         rgba(255, 255, 255, 0.85);
+            --clr-label:        rgba(255, 255, 255, 0.75);
+            --clr-countdown:    rgba(209, 230, 255, 0.85);
+            --clr-sep-section:  rgba(255, 255, 255, 0.85);
+            --clr-sep-divider:  rgba(255, 255, 255, 0.42);
+            --clr-btn-bg:       rgba(255, 255, 255, 0.12);
+            --clr-btn-hover:    rgba(255, 255, 255, 0.26);
+            --clr-loading:      rgba(150, 150, 150, 0.55);
+            --clr-failed:       rgba(210, 200, 185, 0.80);
+            --clr-warn-5h:      rgba(255, 220,  60, 1);
+            --clr-warn-7d:      rgba(210, 155,  20, 1);
+            --clr-warn-over:    rgba(255, 175, 100, 1);
+            --clr-label-ms-disabled: rgba(150, 150, 150, 0.55);
+            --clr-label-ms-exceeded: rgba(210, 65, 65, 0.92);
+            --clr-warn-reset:        rgba(220, 85, 85, 0.93);
 
-        #claude-usage-panel.claude-ai-usage-widget--dark {
-            --clr-bg:           var(--claude-ai-usage-widget--dark--bg);
-            --clr-pending-bg:   var(--claude-ai-usage-widget--dark--pending-bg);
-            --clr-border:       var(--claude-ai-usage-widget--dark--border);
-            --clr-border-hover: var(--claude-ai-usage-widget--dark--border-hover);
-            --clr-text:         var(--claude-ai-usage-widget--dark--text);
-            --clr-label:        var(--claude-ai-usage-widget--dark--label);
-            --clr-countdown:    var(--claude-ai-usage-widget--dark--countdown);
-            --clr-sep-section:  var(--claude-ai-usage-widget--dark--sep-section);
-            --clr-sep-divider:  var(--claude-ai-usage-widget--dark--sep-divider);
-            --clr-btn-bg:       var(--claude-ai-usage-widget--dark--btn-bg);
-            --clr-btn-hover:    var(--claude-ai-usage-widget--dark--btn-hover);
-            --clr-loading:      var(--claude-ai-usage-widget--dark--loading);
-            --clr-failed:       var(--claude-ai-usage-widget--dark--failed);
-            --clr-warn-5h:      var(--claude-ai-usage-widget--dark--warn-5h);
-            --clr-warn-7d:      var(--claude-ai-usage-widget--dark--warn-7d);
-            --clr-spend-over:   var(--claude-ai-usage-widget--dark--spend-over);
-        }
-
-        #claude-usage-panel.claude-ai-usage-widget--light {
-            --clr-bg:           var(--claude-ai-usage-widget--light--bg);
-            --clr-pending-bg:   var(--claude-ai-usage-widget--light--pending-bg);
-            --clr-border:       var(--claude-ai-usage-widget--light--border);
-            --clr-border-hover: var(--claude-ai-usage-widget--light--border-hover);
-            --clr-text:         var(--claude-ai-usage-widget--light--text);
-            --clr-label:        var(--claude-ai-usage-widget--light--label);
-            --clr-countdown:    var(--claude-ai-usage-widget--light--countdown);
-            --clr-sep-section:  var(--claude-ai-usage-widget--light--sep-section);
-            --clr-sep-divider:  var(--claude-ai-usage-widget--light--sep-divider);
-            --clr-btn-bg:       var(--claude-ai-usage-widget--light--btn-bg);
-            --clr-btn-hover:    var(--claude-ai-usage-widget--light--btn-hover);
-            --clr-loading:      var(--claude-ai-usage-widget--light--loading);
-            --clr-failed:       var(--claude-ai-usage-widget--light--failed);
-            --clr-warn-5h:      var(--claude-ai-usage-widget--light--warn-5h);
-            --clr-warn-7d:      var(--claude-ai-usage-widget--light--warn-7d);
-            --clr-spend-over:   var(--claude-ai-usage-widget--light--spend-over);
-        }
-
-        #claude-usage-panel {
             position: fixed;
             right: 6px;
             top: 75%;
@@ -297,31 +364,107 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 5px;
-            padding: 6px 6px;
+            gap: var(--item-gap);
+            padding: 6px;
             border-radius: 16px;
 
             background: var(--clr-bg);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
             border: 1px solid var(--clr-border);
 
             color: var(--clr-text);
-            font: 600 15px / 1.4 monospace;
+            font-family: monospace;
+            font-size: var(--font-md);
+            font-weight: normal;
+            line-height: 1.4;
 
             user-select: none;
             cursor: default;
             transition: background 0.3s;
         }
 
-        #claude-usage-panel.pending-organization {
-            background: var(--clr-pending-bg);
+        /* ── Light theme overrides ── */
+        :host(.theme-light) {
+            --clr-bg:           rgba(225, 222, 210, 0.6);
+            --clr-pending-bg:   rgba(160, 120, 0, 0.5);
+            --clr-border:       rgba(0, 0, 0, 0.15);
+            --clr-border-hover: rgba(0, 0, 0, 0.32);
+            --clr-text:         rgba(20, 20, 20, 0.90);
+            --clr-label:        rgba(20, 20, 20, 0.70);
+            --clr-countdown:    rgba(30, 80, 160, 0.85);
+            --clr-sep-section:  rgba(20, 20, 20, 0.65);
+            --clr-sep-divider:  rgba(20, 20, 20, 0.25);
+            --clr-btn-bg:       rgba(0, 0, 0, 0.08);
+            --clr-btn-hover:    rgba(0, 0, 0, 0.18);
+            --clr-loading:      rgba(100, 100, 100, 0.60);
+            --clr-failed:       rgba(90, 80, 65, 0.80);
+            --clr-warn-5h:      rgba(180, 135, 0, 1);
+            --clr-warn-7d:      rgba(155, 100, 0, 1);
+            --clr-warn-over:    rgba(200, 100, 20, 1);
+            --clr-label-ms-disabled: rgba(110, 110, 110, 0.65);
+            --clr-label-ms-exceeded: rgba(176, 40, 40, 0.88);
+            --clr-warn-reset:        rgba(182, 38, 38, 0.89);
         }
 
-        #claude-usage-panel:hover {
-            border-color: var(--clr-border-hover);
+        /* ── Horizontal mode ── */
+        :host(.mode-horizontal) {
+            flex-direction: row;
+            align-items: stretch;
+            right: auto;
+            top: 6px;
+            transform: none;
         }
 
+        :host(.mode-horizontal) .section-separator {
+            width: var(--sep-thickness);
+            height: auto;
+            align-self: stretch;
+        }
+
+        /* Each section becomes a 2-row grid: label | divider | primary / secondary */
+        :host(.mode-horizontal) .period-section {
+            display: grid;
+            grid-template-columns: auto 1px auto;
+            grid-template-rows: auto auto;
+            column-gap: var(--divider-gap);
+            padding: 0 2px;
+        }
+
+        :host(.mode-horizontal) .period-label {
+            grid-column: 1;
+            grid-row: 1 / 3;
+            align-self: center;
+            padding-bottom: 0;
+        }
+
+        :host(.mode-horizontal) .period-divider {
+            grid-column: 2;
+            grid-row: 1 / 3;
+            width: 1px;
+            height: auto;
+            align-self: stretch;
+            margin-bottom: 0;
+        }
+
+        :host(.mode-horizontal) .period-primary   { grid-column: 3; grid-row: 1; align-self: end;   }
+        :host(.mode-horizontal) .period-secondary { grid-column: 3; grid-row: 2; align-self: start; }
+
+        /* Buttons group — column in vertical mode, row in horizontal */
+        .buttons-group {
+            display: flex;
+            flex-direction: column;
+            gap: var(--item-gap);
+            align-items: center;
+            justify-content: center;
+        }
+
+        :host(.mode-horizontal) .buttons-group { flex-direction: row; align-self: center; }
+
+        :host(.pending-organization) { background: var(--clr-pending-bg); }
+        :host(:hover)                { border-color: var(--clr-border-hover); }
+
+        /* ── Section layout ── */
         .period-section {
             display: flex;
             flex-direction: column;
@@ -331,98 +474,119 @@
         }
 
         .period-label {
-            font-size: 14px;
+            font-size: var(--font-sm);
             font-weight: bold;
             color: var(--clr-label);
-            padding-bottom: 2px;
+            padding-bottom: var(--divider-gap);
         }
 
-        /* Thin transparent line between label and values */
         .period-divider {
             align-self: stretch;
             height: 1px;
             background: var(--clr-sep-divider);
-            margin-bottom: 2px;
+            margin-bottom: var(--divider-gap);
         }
 
-        /* Thicker opaque line between sections */
         .section-separator {
             align-self: stretch;
-            height: 3px;
+            height: var(--sep-thickness);
             background: var(--clr-sep-section);
         }
 
-        .period-value {
-            transition: color 0.3s;
-            font-weight: normal;
-        }
+        /* ── Data rows ── */
+        .period-primary   { font-weight: normal; transition: color 0.3s; }
 
-        .period-countdown {
-            font-size: 14px;
+        .period-secondary {
+            font-size: var(--font-sm);
             font-weight: normal;
-            color: var(--clr-countdown);
+            color: var(--clr-text);
             line-height: 1.2;
+            transition: color 0.3s;
         }
 
-        .period-value.fetch-loading        { color: var(--clr-loading);    }
-        .period-value.fetch-failed         { color: var(--clr-failed);     }
-        .period-value.spend-over-limit     { color: var(--clr-spend-over); }
-        .period-value.usage-warn-five-hour { color: var(--clr-warn-5h);   }
-        .period-value.usage-warn-seven-day { color: var(--clr-warn-7d);   }
+        /* Countdown sections use a distinct tint */
+        .period-secondary.countdown { color: var(--clr-countdown); }
 
+        /* Monthly section disabled/exceeded states */
+        .period-label.label-disabled { color: var(--clr-label-ms-disabled); }
+        .period-label.label-exceeded { color: var(--clr-label-ms-exceeded); }
+        .period-secondary.warn-reset { color: var(--clr-warn-reset); }
+
+        .period-secondary--spacer { display: none; }
+        :host(.mode-horizontal) .period-secondary--spacer { display: block; visibility: hidden; }
+
+        /* ── State modifiers — apply to primary and/or secondary ── */
+        .period-primary.is-loading,
+        .period-secondary.is-loading { color: var(--clr-loading);  }
+        .period-primary.is-failed,
+        .period-secondary.is-failed  { color: var(--clr-failed);   }
+        .period-primary.warn-over,
+        .period-secondary.warn-over  { color: var(--clr-warn-over); }
+        .period-primary.warn-high,
+        .period-secondary.warn-high  { color: var(--clr-warn-7d);  }
+        .period-primary.warn-5h      { color: var(--clr-warn-5h);  }
+        .period-primary.warn-7d      { color: var(--clr-warn-7d);  }
+
+        /* ── Buttons ── */
         .panel-button {
+            box-sizing: border-box;
+            width: 1.8em;
             text-align: center;
-            font-size: 17px;
+            font-size: var(--font-lg);
             line-height: 1;
             cursor: pointer;
-            padding: 1px 6px;
+            padding: 1px 0;
             border-radius: 7px;
             background: var(--clr-btn-bg);
             transition: background 0.2s;
         }
 
-        .panel-button:hover {
-            background: var(--clr-btn-hover);
-        }
+        .panel-button:hover { background: var(--clr-btn-hover); }
     `;
-        document.head.appendChild(styleElement);
-
-        widget = document.createElement('div');
-        widget.id = 'claude-usage-panel';
+        shadow.appendChild(styleElement);
 
         ({ section: fiveHourSectionEl, value: fiveHourValueEl, countdown: fiveHourCountdownEl } =
             makePeriodSection('5h', true));
+        if (fiveHourCountdownEl) fiveHourCountdownEl.classList.add('countdown');
 
         ({ section: sevenDaySectionEl, value: sevenDayValueEl, countdown: sevenDayCountdownEl } =
             makePeriodSection('7d', true));
+        if (sevenDayCountdownEl) sevenDayCountdownEl.classList.add('countdown');
 
-        ({ section: monthlySectionEl, value: monthlyValueEl } =
-            makePeriodSection('MS', false));
+        ({ section: monthlySectionEl, label: monthlyLabelEl, value: monthlyValueEl, countdown: monthlyUtilEl } =
+            makePeriodSection('MS', true));
+        if (monthlyUtilEl) monthlyUtilEl.classList.add('countdown');
+
+        modeButtonElement = document.createElement('div');
+        modeButtonElement.id = 'mode-button';
+        modeButtonElement.className = 'panel-button';
+        modeButtonElement.title = 'Switch layout mode';
+        modeButtonElement.addEventListener('click', (event) => { event.stopPropagation(); toggleMode(); });
 
         refreshButtonElement = document.createElement('div');
         refreshButtonElement.id = 'refresh-button';
         refreshButtonElement.className = 'panel-button';
         refreshButtonElement.textContent = '\u21bb'; /* ↻ */
-        refreshButtonElement.addEventListener('click', (e) => { e.stopPropagation(); fetchStats(); });
+        refreshButtonElement.addEventListener('click', (event) => { event.stopPropagation(); fetchStats(); });
+
+        const buttonsGroup = document.createElement('div');
+        buttonsGroup.className = 'buttons-group';
+        buttonsGroup.append(modeButtonElement, refreshButtonElement);
 
         const makeSep = () => { const d = document.createElement('div'); d.className = 'section-separator'; return d; };
-        widget.append(fiveHourSectionEl, makeSep(), sevenDaySectionEl, makeSep(), monthlySectionEl, refreshButtonElement);
+        shadow.append(fiveHourSectionEl, makeSep(), sevenDaySectionEl, makeSep(), monthlySectionEl, makeSep(), buttonsGroup);
         document.body.appendChild(widget);
 
-        /* Restore saved vertical position */
-        const savedVerticalPosition = localStorage.getItem(POSITION_STORAGE_KEY);
-        if (savedVerticalPosition) {
-            widget.style.transform = 'none';
-            widget.style.top = savedVerticalPosition;
-            clampWidgetPosition();
-        }
+        /* Restore saved state (position + mode) */
+        state = loadState();
+        applyMode(state.mode || 'vertical');
 
         applyTheme();
         setWidgetPending(true);
         setFetchStatus('idle');
         makeDraggable(widget);
 
-        /* Keep widget fully on-screen when the viewport shrinks (e.g. DevTools opens) */
+        /* Keep widget fully on-screen when the viewport resizes (e.g. DevTools opens) */
         window.addEventListener('resize', clampWidgetPosition);
     }
 
@@ -453,15 +617,19 @@
      * @returns {void}
      */
     function setFetchStatus(status) {
-        [fiveHourValueEl, sevenDayValueEl, monthlyValueEl].forEach(el => {
+        [fiveHourValueEl, sevenDayValueEl, monthlyValueEl, monthlyUtilEl].forEach(el => {
             if (!el) return;
-            el.classList.remove('fetch-loading', 'fetch-failed');
-            if (status === 'loading') el.classList.add('fetch-loading');
-            if (status === 'failed')  el.classList.add('fetch-failed');
+            el.classList.remove('is-loading', 'is-failed');
+            if (status === 'loading') el.classList.add('is-loading');
+            if (status === 'failed')  el.classList.add('is-failed');
             if (status === 'loading' || status === 'failed') {
-                el.classList.remove('usage-warn-five-hour', 'usage-warn-seven-day');
+                el.classList.remove('warn-5h', 'warn-7d', 'warn-over', 'warn-high');
             }
         });
+
+        if (monthlyValueEl) monthlyValueEl.style.color = '';
+        if (monthlyUtilEl)  monthlyUtilEl.classList.remove('warn-reset');
+        if (monthlyLabelEl) monthlyLabelEl.classList.remove('label-disabled', 'label-exceeded');
 
         if (refreshButtonElement) {
             const lastRefreshLine = lastUpdated
@@ -478,44 +646,69 @@
     }
 
     /**
-     * Makes an element draggable along the Y-axis only, constrained within the viewport.
-     * Persists the final position to localStorage under POSITION_STORAGE_KEY.
+     * Makes the widget draggable along the axis appropriate for the current mode:
+     * - vertical mode: Y-axis only (constrained within viewport height)
+     * - horizontal mode: X-axis only (constrained within viewport width)
+     * Persists the final position to state/localStorage on mouseup.
      * @param {HTMLElement} draggableElement
      * @returns {void}
      */
     function makeDraggable(draggableElement) {
+        /** @type {number} */ let startX = 0;
         /** @type {number} */ let startY = 0;
+        /** @type {number} */ let startLeft = 0;
         /** @type {number} */ let startTop = 0;
         /** @type {boolean} */ let active = false;
         /** @type {boolean} */ let dragMoved = false;
 
-        draggableElement.addEventListener('mousedown', (/** @type {MouseEvent} */ e) => {
-            if (e.button !== 0) return;
+        draggableElement.addEventListener('mousedown', (/** @type {MouseEvent} */ event) => {
+            if (event.button !== 0) return;
             active = true;
             dragMoved = false;
-            startY = e.clientY;
-            startTop = draggableElement.getBoundingClientRect().top;
+            startX = event.clientX;
+            startY = event.clientY;
+            const rect = draggableElement.getBoundingClientRect();
+            startLeft = rect.left;
+            startTop = rect.top;
             draggableElement.style.transform = 'none';
-            draggableElement.style.top = startTop + 'px';
-            e.preventDefault();
+            if (currentMode === 'horizontal') {
+                draggableElement.style.left = startLeft + 'px';
+            } else {
+                draggableElement.style.top = startTop + 'px';
+            }
+            event.preventDefault();
         });
 
-        document.addEventListener('mousemove', (/** @type {MouseEvent} */ e) => {
+        document.addEventListener('mousemove', (/** @type {MouseEvent} */ event) => {
             if (!active) return;
-            const deltaY = e.clientY - startY;
-            if (Math.abs(deltaY) > 4) dragMoved = true;
-            const clampedTop = Math.max(0, Math.min(window.innerHeight - draggableElement.offsetHeight, startTop + deltaY));
-            draggableElement.style.top = clampedTop + 'px';
+            if (currentMode === 'horizontal') {
+                const deltaX = event.clientX - startX;
+                if (Math.abs(deltaX) > 4) dragMoved = true;
+                const clamped = Math.max(0, Math.min(window.innerWidth - draggableElement.offsetWidth, startLeft + deltaX));
+                draggableElement.style.left = clamped + 'px';
+            } else {
+                const deltaY = event.clientY - startY;
+                if (Math.abs(deltaY) > 4) dragMoved = true;
+                const clamped = Math.max(0, Math.min(window.innerHeight - draggableElement.offsetHeight, startTop + deltaY));
+                draggableElement.style.top = clamped + 'px';
+            }
         });
 
         document.addEventListener('mouseup', () => {
-            if (active && dragMoved) localStorage.setItem(POSITION_STORAGE_KEY, draggableElement.style.top);
+            if (active && dragMoved) {
+                if (currentMode === 'horizontal') {
+                    state.horizontalPositionPx = parseFloat(draggableElement.style.left);
+                } else {
+                    state.verticalPositionPx = parseFloat(draggableElement.style.top);
+                }
+                saveState();
+            }
             active = false;
         });
 
         /* Suppress the click that fires after a drag */
-        draggableElement.addEventListener('click', (e) => {
-            if (dragMoved) { e.stopPropagation(); dragMoved = false; }
+        draggableElement.addEventListener('click', (event) => {
+            if (dragMoved) { event.stopPropagation(); dragMoved = false; }
         }, true);
     }
 
@@ -523,19 +716,19 @@
 
     /**
      * @typedef {{ utilization: number, resets_at: string }} Period
-     * @typedef {{ is_enabled: boolean, monthly_limit: number, used_credits: number, utilization: number|null }} ExtraUsage
-     * @typedef {{ five_hour: Period, seven_day: Period, extra_usage: ExtraUsage|null }} UsageData
+     * @typedef {{ five_hour: Period, seven_day: Period }} UsageData
+     * @typedef {{ is_enabled: boolean, monthly_credit_limit: number, currency: string, used_credits: number, disabled_reason: string|null, disabled_until: string|null }} OverageData
      */
 
     /**
-     * Fetches current usage stats from the Claude API and updates the widget.
+     * Fetches current usage stats and overage spend limit from the Claude API and updates the widget.
      * @returns {Promise<void>}
      */
     async function fetchStats() {
         if (!organizationId) return;
         setFetchStatus('loading');
         try {
-            const response = await fetch(`https://claude.ai/api/organizations/${organizationId}/usage`, {
+            const fetchOptions = {
                 credentials: 'include',
                 headers: {
                     'User-Agent': navigator.userAgent,
@@ -552,11 +745,22 @@
                 referrer: 'https://claude.ai/settings/usage',
                 method: 'GET',
                 mode: 'cors'
-            });
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-            const data = /** @type {UsageData} */ (await response.json());
-            console.debug('[claude-ai-usage-widget] usage data:', data);
+            };
 
+            const [usageResponse, overageResponse] = await Promise.all([
+                fetch(`https://claude.ai/api/organizations/${organizationId}/usage`, fetchOptions),
+                fetch(`https://claude.ai/api/organizations/${organizationId}/overage_spend_limit`, fetchOptions),
+            ]);
+            if (!usageResponse.ok) throw new Error('HTTP ' + usageResponse.status);
+
+            const [data, overage] = /** @type {[UsageData, OverageData|null]} */ (await Promise.all([
+                usageResponse.json(),
+                overageResponse.ok ? overageResponse.json() : Promise.resolve(null),
+            ]));
+            console.debug('[claude-ai-usage-widget] usage data:', data);
+            console.debug('[claude-ai-usage-widget] overage data:', overage);
+
+            /* --- 5h / 7d --- */
             const fiveHourPct       = formatPercent(data?.five_hour?.utilization);
             const sevenDayPct       = formatPercent(data?.seven_day?.utilization);
             const fiveHourCountdown = formatTimeUntilReset(data?.five_hour?.resets_at);
@@ -569,27 +773,52 @@
             if (sevenDayValueEl)     sevenDayValueEl.textContent     = sevenDayPct;
             if (sevenDayCountdownEl) sevenDayCountdownEl.textContent = sevenDayCountdown;
 
-            const extra = data?.extra_usage;
-            if (monthlyValueEl) monthlyValueEl.textContent = formatDollars(extra?.used_credits);
+            /* --- Monthly (overage endpoint) --- */
+            const overageEnabled  = overage?.is_enabled === true;
+            const disabledUntilRaw = overage?.disabled_until ?? null;
+            const overageExceeded = overageEnabled && disabledUntilRaw != null;
+            const rawUsedCredits  = overageEnabled ? (overage?.used_credits           ?? null) : null;
+            const rawCreditLimit  = overageEnabled ? (overage?.monthly_credit_limit   ?? null) : null;
+            const overageUtilization = (rawUsedCredits != null && rawCreditLimit != null && rawCreditLimit > 0)
+                ? (rawUsedCredits / rawCreditLimit) * 100 : null;
+
+            /* Effective reset: disabled_until directly when set, otherwise first of next month */
+            const now = new Date();
+            const effectiveResetIso = disabledUntilRaw
+                ?? new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+            const effectiveResetDate = new Date(effectiveResetIso);
+            const monthPeriodMs = effectiveResetDate.getTime() - new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+            if (monthlyValueEl) monthlyValueEl.textContent = overageEnabled ? formatDollars(rawUsedCredits) : '--';
+            if (monthlyUtilEl)  monthlyUtilEl.textContent  = overageEnabled ? formatTimeUntilReset(effectiveResetIso) : '--';
 
             lastUpdated = new Date();
-            setFetchStatus('ok');
+            setFetchStatus('ok'); /* clears inline color, label-disabled, label-exceeded, warn-reset */
 
-            /* Usage-threshold colours */
-            const fiveHourOver = (data?.five_hour?.utilization ?? 0) > 75;
-            const sevenDayOver = (data?.seven_day?.utilization ?? 0) > 75;
-            if (fiveHourValueEl) fiveHourValueEl.classList.toggle('usage-warn-five-hour', fiveHourOver);
-            if (sevenDayValueEl) sevenDayValueEl.classList.toggle('usage-warn-seven-day', sevenDayOver);
-
-            /* Monthly spend-over-limit colour */
-            if (monthlyValueEl && extra) {
-                monthlyValueEl.classList.toggle(
-                    'spend-over-limit',
-                    extra.is_enabled && extra.used_credits >= extra.monthly_limit
-                );
+            /* Monthly value: green → orange gradient via inline style */
+            if (monthlyValueEl) {
+                monthlyValueEl.style.color = (overageEnabled && overageUtilization != null)
+                    ? monthlySpendColor(overageUtilization) : '';
             }
 
-            /* Section tooltips */
+            /* Monthly countdown: subdued red when limit exceeded */
+            if (monthlyUtilEl) {
+                monthlyUtilEl.classList.toggle('warn-reset', overageExceeded);
+            }
+
+            /* MS label: grey when feature off; matte red when limit exceeded */
+            if (monthlyLabelEl) {
+                monthlyLabelEl.classList.toggle('label-disabled', !overageEnabled && !overageExceeded);
+                monthlyLabelEl.classList.toggle('label-exceeded', overageExceeded);
+            }
+
+            /* 5h / 7d threshold colours */
+            const fiveHourOver = (data?.five_hour?.utilization ?? 0) > 75;
+            const sevenDayOver = (data?.seven_day?.utilization ?? 0) > 75;
+            if (fiveHourValueEl) fiveHourValueEl.classList.toggle('warn-5h', fiveHourOver);
+            if (sevenDayValueEl) sevenDayValueEl.classList.toggle('warn-7d', sevenDayOver);
+
+            /* --- Tooltips --- */
             const FH_MS = 5 * 60 * 60 * 1000;
             const SD_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -612,12 +841,28 @@
                     'elapsed:   ' + periodElapsed(data?.seven_day?.resets_at, SD_MS),
                 ].join('\n');
             }
-            if (monthlySectionEl && extra) {
-                const spendStr = extra.used_credits != null && isFinite(extra.used_credits)
-                    ? '$' + (extra.used_credits / 100).toFixed(2) : '--';
-                const limitStr = extra.monthly_limit != null && isFinite(extra.monthly_limit)
-                    ? '$' + (extra.monthly_limit / 100).toFixed(2) : '--';
-                monthlySectionEl.title = spendStr + ' / ' + limitStr;
+            if (monthlySectionEl && overage) {
+                const spendStr       = overageEnabled && rawUsedCredits != null ? '$' + (rawUsedCredits / 100).toFixed(2) : '--';
+                const limitStr       = overageEnabled && rawCreditLimit != null ? '$' + (rawCreditLimit / 100).toFixed(2) : '--';
+                const currency       = overage?.currency ?? '';
+                const utilStr        = overageUtilization != null ? formatPercent(overageUtilization) : '--';
+                const resetInStr     = overageEnabled ? formatTimeUntilReset(effectiveResetIso) : '--';
+                const resetAtStr     = overageEnabled ? formatResetTime(effectiveResetIso) : '--';
+                const resetDayOfWeek = overageEnabled && !isNaN(effectiveResetDate.getTime())
+                    ? effectiveResetDate.toLocaleDateString([], { weekday: 'long' }) : '';
+                const monthElapsed   = overageEnabled ? periodElapsed(effectiveResetIso, monthPeriodMs) : '--';
+                const disabledReason = overage?.disabled_reason;
+                const reasonStr      = disabledReason
+                    ? disabledReason.replace(/_/g, ' ').replace(/^./, (/** @type {string} */ c) => c.toUpperCase())
+                    : null;
+                monthlySectionEl.title = [
+                    'utilization:  ' + utilStr,
+                    'resets in:    ' + resetInStr,
+                    'resets at:    ' + [resetAtStr, resetDayOfWeek].filter(Boolean).join(' '),
+                    'elapsed:      ' + monthElapsed,
+                    'spend:        ' + spendStr + ' / ' + limitStr + (currency ? ' ' + currency : ''),
+                    ...(reasonStr ? ['reason:       ' + reasonStr] : []),
+                ].join('\n');
             }
 
         } catch (fetchError) {
