@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude AI Usage Widget
 // @namespace    claude-ai-usage-widget
-// @version      0.3.1
+// @version      0.3.2
 // @description  Floating usage stats widget for claude.ai; suppresses the chat-box usage warning.
 // @author       CS-Account
 // @match        https://claude.ai/*
@@ -48,10 +48,10 @@
     const LIGHT_CLASS = 'theme-light';
 
     /** SVG icons for the mode-toggle button. Use --clr-icon-* vars so both themes work. */
-    /* shown in vertical mode   → click switches to horizontal; origin=current(portrait), ghost=destination(landscape) */
-    const SVG_ARROWS_H = '<svg width="32" height="32" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="14" y="14" width="22" height="10" rx="2.5" fill="none" stroke="var(--clr-icon-ghost)" stroke-width="3"/><rect x="40" y="28" width="10" height="22" rx="2.5" fill="none" stroke="var(--clr-icon-origin)" stroke-width="3"/><circle cx="45" cy="19" r="22.2" fill="none" stroke="var(--clr-icon-arc)" stroke-width="3" stroke-linecap="round" stroke-dasharray="11.624 127.865" stroke-dashoffset="-46.496"/><circle cx="45" cy="19" r="1.5" fill="var(--clr-icon-arc)"/></svg>';
-    /* shown in horizontal mode → click switches to vertical;   origin=current(landscape), ghost=destination(portrait) */
-    const SVG_ARROWS_V = '<svg width="32" height="32" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="14" y="14" width="22" height="10" rx="2.5" fill="none" stroke="var(--clr-icon-origin)" stroke-width="3"/><rect x="40" y="28" width="10" height="22" rx="2.5" fill="none" stroke="var(--clr-icon-ghost)" stroke-width="3"/><circle cx="45" cy="19" r="22.2" fill="none" stroke="var(--clr-icon-arc)" stroke-width="3" stroke-linecap="round" stroke-dasharray="11.624 127.865" stroke-dashoffset="-46.496"/><circle cx="45" cy="19" r="1.5" fill="var(--clr-icon-arc)"/></svg>';
+    /* shown in vertical mode   → click switches to horizontal; dest=landscape(solid), src=portrait(dim) */
+    const SVG_ARROWS_H = '<svg width="32" height="32" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="14" y="14" width="22" height="10" rx="2.5" fill="none" stroke="var(--clr-icon-dest)" stroke-width="3"/><rect x="40" y="28" width="10" height="22" rx="2.5" fill="none" stroke="var(--clr-icon-src)" stroke-width="3"/><circle cx="45" cy="19" r="22.2" fill="none" stroke="var(--clr-icon-arc)" stroke-width="3" stroke-linecap="round" stroke-dasharray="11.624 127.865" stroke-dashoffset="-46.496"/><circle cx="45" cy="19" r="1.5" fill="var(--clr-icon-arc)"/></svg>';
+    /* shown in horizontal mode → click switches to vertical;   dest=portrait(solid), src=landscape(dim) */
+    const SVG_ARROWS_V = '<svg width="32" height="32" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="14" y="14" width="22" height="10" rx="2.5" fill="none" stroke="var(--clr-icon-src)" stroke-width="3"/><rect x="40" y="28" width="10" height="22" rx="2.5" fill="none" stroke="var(--clr-icon-dest)" stroke-width="3"/><circle cx="45" cy="19" r="22.2" fill="none" stroke="var(--clr-icon-arc)" stroke-width="3" stroke-linecap="round" stroke-dasharray="11.624 127.865" stroke-dashoffset="-46.496"/><circle cx="45" cy="19" r="1.5" fill="var(--clr-icon-arc)"/></svg>';
 
     /** @type {string|null} */
     let organizationId = null;
@@ -385,9 +385,9 @@
             --clr-state-warn-7d:      rgba(210, 155,  20, 1);
             --clr-state-disabled: rgba(150, 150, 150, 0.55);
             --clr-exceeded: rgba(211, 95, 95, 0.92);
-            --clr-icon-origin:        rgba(255, 255, 255, 0.85);
-            --clr-icon-ghost:         rgba(136, 136, 136, 0.75);
-            --clr-icon-arc:          rgba(200, 200, 200, 0.80);
+            --clr-icon-dest:          rgba(255, 255, 255, 0.85);
+            --clr-icon-src:           rgba(136, 136, 136, 0.75);
+            --clr-icon-arc:           rgba(200, 200, 200, 0.80);
 
             position: fixed;
             right: 6px;
@@ -443,9 +443,9 @@
             --clr-state-warn-7d:      rgba(155, 100, 0, 1);
             --clr-state-disabled: rgba(110, 110, 110, 0.65);
             --clr-exceeded: rgba(170, 63, 63, 0.88);
-            --clr-icon-origin:        rgba( 20,  20,  20, 0.90);
-            --clr-icon-ghost:         rgba(140, 140, 140, 0.75);
-            --clr-icon-arc:          rgba( 80,  80,  80, 0.75);
+            --clr-icon-dest:          rgba( 20,  20,  20, 0.90);
+            --clr-icon-src:           rgba(140, 140, 140, 0.75);
+            --clr-icon-arc:           rgba( 80,  80,  80, 0.75);
         }
 
         /* ── Horizontal mode ── */
