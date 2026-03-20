@@ -34,6 +34,12 @@
     const DARK_CLASS  = 'theme-dark';
     const LIGHT_CLASS = 'theme-light';
 
+    /** SVG icons for the mode-toggle button. Use --clr-icon-* vars so both themes work. */
+    /* shown in vertical mode   → click switches to horizontal (landscape rect = ghost/origin) */
+    const SVG_ARROWS_H = '<svg width="32" height="32" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="14" y="14" width="22" height="10" rx="2.5" fill="none" stroke="var(--clr-icon-origin)" stroke-width="3"/><rect x="40" y="28" width="10" height="22" rx="2.5" fill="none" stroke="var(--clr-icon-ghost)" stroke-width="3"/><circle cx="45" cy="19" r="22.2" fill="none" stroke="var(--clr-icon-arc)" stroke-width="3" stroke-linecap="round" stroke-dasharray="11.624 127.865" stroke-dashoffset="-46.496"/><circle cx="45" cy="19" r="1.5" fill="var(--clr-icon-arc)"/></svg>';
+    /* shown in horizontal mode → click switches to vertical   (portrait   rect = ghost/origin) */
+    const SVG_ARROWS_V = '<svg width="32" height="32" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="14" y="14" width="22" height="10" rx="2.5" fill="none" stroke="var(--clr-icon-ghost)" stroke-width="3"/><rect x="40" y="28" width="10" height="22" rx="2.5" fill="none" stroke="var(--clr-icon-origin)" stroke-width="3"/><circle cx="45" cy="19" r="22.2" fill="none" stroke="var(--clr-icon-arc)" stroke-width="3" stroke-linecap="round" stroke-dasharray="11.624 127.865" stroke-dashoffset="-46.496"/><circle cx="45" cy="19" r="1.5" fill="var(--clr-icon-arc)"/></svg>';
+
     /** @type {string|null} */
     let organizationId = null;
 
@@ -47,23 +53,28 @@
      * Persisted widget state.
      * @type {{ verticalPositionPx: number|null, horizontalPositionPx: number|null, mode: string }}
      */
-    let state = { verticalPositionPx: null, horizontalPositionPx: null, mode: 'vertical' };
+    let state = {
+        verticalPositionPx: null,
+        horizontalPositionPx: null,
+        mode: 'vertical',
+    };
 
     /** @type {string} */
     let currentMode = 'vertical';
 
     /* --- Widget element refs --- */
     /** @type {HTMLElement|null} */ let widget = null;
-    /** @type {HTMLElement|null} */ let fiveHourSectionEl = null;
-    /** @type {HTMLElement|null} */ let fiveHourValueEl = null;
-    /** @type {HTMLElement|null} */ let fiveHourCountdownEl = null;
-    /** @type {HTMLElement|null} */ let sevenDaySectionEl = null;
-    /** @type {HTMLElement|null} */ let sevenDayValueEl = null;
-    /** @type {HTMLElement|null} */ let sevenDayCountdownEl = null;
-    /** @type {HTMLElement|null} */ let monthlySectionEl = null;
-    /** @type {HTMLElement|null} */ let monthlyLabelEl = null;
-    /** @type {HTMLElement|null} */ let monthlyValueEl = null;
-    /** @type {HTMLElement|null} */ let monthlyUtilEl = null;
+    /** @type {HTMLElement|null} */ let panelElement = null;
+    /** @type {HTMLElement|null} */ let fiveHourSectionElement = null;
+    /** @type {HTMLElement|null} */ let fiveHourValueElement = null;
+    /** @type {HTMLElement|null} */ let fiveHourCountdownElement = null;
+    /** @type {HTMLElement|null} */ let sevenDaySectionElement = null;
+    /** @type {HTMLElement|null} */ let sevenDayValueElement = null;
+    /** @type {HTMLElement|null} */ let sevenDayCountdownElement = null;
+    /** @type {HTMLElement|null} */ let monthlySectionElement = null;
+    /** @type {HTMLElement|null} */ let monthlyLabelElement = null;
+    /** @type {HTMLElement|null} */ let monthlyValueElement = null;
+    /** @type {HTMLElement|null} */ let monthlyUtilElement = null;
     /** @type {HTMLElement|null} */ let refreshButtonElement = null;
     /** @type {HTMLElement|null} */ let modeButtonElement = null;
 
@@ -86,7 +97,9 @@
      * @returns {string|null}
      */
     function findOrganizationId() {
-        return document.cookie.split('; ').find(cookie => cookie.startsWith('lastActiveOrg='))?.split('=')[1] ?? null;
+        return document.cookie.split('; ')
+            .find(cookie => cookie.startsWith('lastActiveOrg='))
+            ?.split('=')[1] ?? null;
     }
 
     /**
@@ -122,9 +135,16 @@
         const offsetMinutes = -date.getTimezoneOffset();
         const offsetSign = offsetMinutes >= 0 ? '+' : '-';
         const absOffset = Math.abs(offsetMinutes);
-        return date.getFullYear() + '-' + zeroPad(date.getMonth() + 1) + '-' + zeroPad(date.getDate()) + ' ' +
-            zeroPad(date.getHours()) + ':' + zeroPad(date.getMinutes()) + ':' + zeroPad(date.getSeconds()) + ' ' +
-            offsetSign + zeroPad(Math.floor(absOffset / 60)) + zeroPad(absOffset % 60);
+        const datePart = date.getFullYear() + '-'
+            + zeroPad(date.getMonth() + 1) + '-'
+            + zeroPad(date.getDate());
+        const timePart = zeroPad(date.getHours()) + ':'
+            + zeroPad(date.getMinutes()) + ':'
+            + zeroPad(date.getSeconds());
+        const tzPart = offsetSign
+            + zeroPad(Math.floor(absOffset / 60))
+            + zeroPad(absOffset % 60);
+        return datePart + ' ' + timePart + ' ' + tzPart;
     }
 
     /**
@@ -138,7 +158,9 @@
         const resetDate = new Date(isoTimestamp);
         if (isNaN(resetDate.getTime())) return '--';
         const elapsed = Date.now() - (resetDate.getTime() - periodMs);
-        return Math.round(Math.max(0, Math.min(100, (elapsed / periodMs) * 100))) + '% through';
+        return Math.round(
+            Math.max(0, Math.min(100, (elapsed / periodMs) * 100))
+        ) + '% through';
     }
 
     /**
@@ -163,13 +185,17 @@
 
     /**
      * Computes an HSL colour for the monthly spend value, interpolating from green (0%) to orange (100%).
-     * Accounts for the active theme. Clamps utilization to [0, 100].
+     * Returns red when the limit is exceeded. Accounts for the active theme.
      * @param {number} utilization - 0–100
-     * @returns {string} CSS hsl() string
+     * @param {boolean} [exceeded] - true when the spend limit has been exceeded
+     * @returns {string} CSS colour string
      */
-    function monthlySpendColor(utilization) {
-        const t = Math.max(0, Math.min(1, utilization / 100));
+    function monthlySpendColor(utilization, exceeded = false) {
+        if (exceeded) {
+            return 'var(--clr-exceeded)';
+        }
         const isLight = document.documentElement.getAttribute('data-mode') === 'light';
+        const t = Math.max(0, Math.min(1, utilization / 100));
         const h = Math.round(145 + (28 - 145) * t); /* green(145) → orange(28) */
         if (isLight) {
             const s = Math.round(40 + (75 - 40) * t);
@@ -188,7 +214,10 @@
     function loadState() {
         try {
             const raw = localStorage.getItem(STATE_STORAGE_KEY);
-            if (raw) return Object.assign({ verticalPositionPx: null, horizontalPositionPx: null, mode: 'vertical' }, JSON.parse(raw));
+            if (raw) return Object.assign(
+                { verticalPositionPx: null, horizontalPositionPx: null, mode: 'vertical' },
+                JSON.parse(raw)
+            );
         } catch {}
         return { verticalPositionPx: null, horizontalPositionPx: null, mode: 'vertical' };
     }
@@ -227,7 +256,9 @@
         section.append(label, divider, value);
 
         const countdown = document.createElement('div');
-        countdown.className = withCountdown ? 'period-secondary' : 'period-secondary period-secondary--spacer';
+        countdown.className = withCountdown
+            ? 'period-secondary'
+            : 'period-secondary period-secondary--spacer';
         countdown.textContent = withCountdown ? '--' : '\u00a0'; /* nbsp holds line height */
         section.appendChild(countdown);
 
@@ -289,7 +320,7 @@
                 widget.style.left = '50%';
                 widget.style.transform = 'translateX(-50%)';
             }
-            if (modeButtonElement) modeButtonElement.textContent = '\u2195'; /* ↕ */
+            if (modeButtonElement) modeButtonElement.innerHTML = SVG_ARROWS_V;
         } else {
             widget.style.left = 'auto';
             widget.style.right = '6px';
@@ -300,7 +331,7 @@
                 widget.style.top = '75%';
                 widget.style.transform = 'translateY(-50%)';
             }
-            if (modeButtonElement) modeButtonElement.textContent = '\u2194'; /* ↔ */
+            if (modeButtonElement) modeButtonElement.innerHTML = SVG_ARROWS_H;
         }
 
         saveState();
@@ -335,32 +366,35 @@
             --font-lg:       17px;
             --divider-gap:   2px;
 
-            --clr-bg:           rgba(20, 20, 20, 0.6);
-            --clr-pending-bg:   rgba(180, 140, 0, 0.6);
+            --clr-bg:           rgba(20, 20, 20, 0.75);
+            --clr-bg-pending:   rgba(180, 140, 0, 0.6);
             --clr-border:       rgba(255, 255, 255, 0.15);
-            --clr-border-hover: rgba(255, 255, 255, 0.32);
+            --clr-border-hover: rgba(255, 255, 255, 0.75);
             --clr-text:         rgba(255, 255, 255, 0.85);
-            --clr-label:        rgba(255, 255, 255, 0.75);
-            --clr-countdown:    rgba(209, 230, 255, 0.85);
+            --clr-text-muted:        rgba(255, 255, 255, 0.75);
+            --clr-text-countdown:    rgba(209, 230, 255, 0.85);
             --clr-sep-section:  rgba(255, 255, 255, 0.85);
             --clr-sep-divider:  rgba(255, 255, 255, 0.42);
-            --clr-btn-bg:       rgba(255, 255, 255, 0.12);
-            --clr-btn-hover:    rgba(255, 255, 255, 0.26);
-            --clr-loading:      rgba(150, 150, 150, 0.55);
-            --clr-failed:       rgba(210, 200, 185, 0.80);
-            --clr-warn-5h:      rgba(255, 220,  60, 1);
-            --clr-warn-7d:      rgba(210, 155,  20, 1);
-            --clr-warn-over:    rgba(255, 175, 100, 1);
-            --clr-label-ms-disabled: rgba(150, 150, 150, 0.55);
-            --clr-label-ms-exceeded: rgba(210, 65, 65, 0.92);
-            --clr-warn-reset:        rgba(220, 85, 85, 0.93);
+            --clr-bg-btn:       rgba(255, 255, 255, 0.12);
+            --clr-bg-btn-hover:    rgba(255, 255, 255, 0.25);
+            --clr-text-loading:      rgba(150, 150, 150, 0.55);
+            --clr-text-failed:       rgba(210, 200, 185, 0.80);
+            --clr-state-warn-5h:      rgba(255, 220,  60, 1);
+            --clr-state-warn-7d:      rgba(210, 155,  20, 1);
+            --clr-state-disabled: rgba(150, 150, 150, 0.55);
+            --clr-exceeded: rgba(211, 95, 95, 0.92);
+            --clr-icon-origin:        rgba(255, 255, 255, 0.85);
+            --clr-icon-ghost:         rgba(136, 136, 136, 0.75);
+            --clr-icon-arc:          rgba(200, 200, 200, 0.80);
 
             position: fixed;
             right: 6px;
             top: 75%;
             transform: translateY(-50%);
             z-index: 9999;
+        }
 
+        .container {
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -381,39 +415,47 @@
 
             user-select: none;
             cursor: default;
-            transition: background 0.3s;
+            transition:
+                background 0.2s,
+                border-color 0.2s,
+                backdrop-filter 0.2s,
+                -webkit-backdrop-filter 0.2s;
         }
 
         /* ── Light theme overrides ── */
         :host(.theme-light) {
-            --clr-bg:           rgba(225, 222, 210, 0.6);
-            --clr-pending-bg:   rgba(160, 120, 0, 0.5);
+            --clr-bg:           rgba(225, 222, 210, 0.75);
+            --clr-bg-pending:   rgba(160, 120, 0, 0.5);
             --clr-border:       rgba(0, 0, 0, 0.15);
-            --clr-border-hover: rgba(0, 0, 0, 0.32);
+            --clr-border-hover: rgba(0, 0, 0, 0.75);
             --clr-text:         rgba(20, 20, 20, 0.90);
-            --clr-label:        rgba(20, 20, 20, 0.70);
-            --clr-countdown:    rgba(30, 80, 160, 0.85);
+            --clr-text-muted:        rgba(20, 20, 20, 0.70);
+            --clr-text-countdown:    rgba(30, 80, 160, 0.85);
             --clr-sep-section:  rgba(20, 20, 20, 0.65);
             --clr-sep-divider:  rgba(20, 20, 20, 0.25);
-            --clr-btn-bg:       rgba(0, 0, 0, 0.08);
-            --clr-btn-hover:    rgba(0, 0, 0, 0.18);
-            --clr-loading:      rgba(100, 100, 100, 0.60);
-            --clr-failed:       rgba(90, 80, 65, 0.80);
-            --clr-warn-5h:      rgba(180, 135, 0, 1);
-            --clr-warn-7d:      rgba(155, 100, 0, 1);
-            --clr-warn-over:    rgba(200, 100, 20, 1);
-            --clr-label-ms-disabled: rgba(110, 110, 110, 0.65);
-            --clr-label-ms-exceeded: rgba(176, 40, 40, 0.88);
-            --clr-warn-reset:        rgba(182, 38, 38, 0.89);
+            --clr-bg-btn:       rgba(0, 0, 0, 0.08);
+            --clr-bg-btn-hover:    rgba(0, 0, 0, 0.25);
+            --clr-text-loading:      rgba(100, 100, 100, 0.60);
+            --clr-text-failed:       rgba(90, 80, 65, 0.80);
+            --clr-state-warn-5h:      rgba(180, 135, 0, 1);
+            --clr-state-warn-7d:      rgba(155, 100, 0, 1);
+            --clr-state-disabled: rgba(110, 110, 110, 0.65);
+            --clr-exceeded: rgba(170, 63, 63, 0.88);
+            --clr-icon-origin:        rgba( 20,  20,  20, 0.90);
+            --clr-icon-ghost:         rgba(140, 140, 140, 0.75);
+            --clr-icon-arc:          rgba( 80,  80,  80, 0.75);
         }
 
         /* ── Horizontal mode ── */
         :host(.mode-horizontal) {
-            flex-direction: row;
-            align-items: stretch;
             right: auto;
             top: 6px;
             transform: none;
+        }
+
+        :host(.mode-horizontal) .container {
+            flex-direction: row;
+            align-items: stretch;
         }
 
         :host(.mode-horizontal) .section-separator {
@@ -447,8 +489,12 @@
             margin-bottom: 0;
         }
 
-        :host(.mode-horizontal) .period-primary   { grid-column: 3; grid-row: 1; align-self: end;   }
-        :host(.mode-horizontal) .period-secondary { grid-column: 3; grid-row: 2; align-self: start; }
+        :host(.mode-horizontal) .period-primary   {
+            grid-column: 3; grid-row: 1; align-self: end;
+        }
+        :host(.mode-horizontal) .period-secondary {
+            grid-column: 3; grid-row: 2; align-self: start;
+        }
 
         /* Buttons group — column in vertical mode, row in horizontal */
         .buttons-group {
@@ -459,10 +505,18 @@
             justify-content: center;
         }
 
-        :host(.mode-horizontal) .buttons-group { flex-direction: row; align-self: center; }
+        :host(.mode-horizontal) .buttons-group {
+            flex-direction: row; align-self: center;
+        }
 
-        :host(.pending-organization) { background: var(--clr-pending-bg); }
-        :host(:hover)                { border-color: var(--clr-border-hover); }
+        :host(.pending-organization) .container {
+            background: var(--clr-bg-pending);
+        }
+        :host(:hover) .container {
+            border-color: var(--clr-border-hover);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
 
         /* ── Section layout ── */
         .period-section {
@@ -476,7 +530,7 @@
         .period-label {
             font-size: var(--font-sm);
             font-weight: bold;
-            color: var(--clr-label);
+            color: var(--clr-text-muted);
             padding-bottom: var(--divider-gap);
         }
 
@@ -494,87 +548,113 @@
         }
 
         /* ── Data rows ── */
-        .period-primary   { font-weight: normal; transition: color 0.3s; }
+        .period-primary   { font-weight: normal; transition: color 0.2s; }
 
         .period-secondary {
             font-size: var(--font-sm);
             font-weight: normal;
             color: var(--clr-text);
             line-height: 1.2;
-            transition: color 0.3s;
+            transition: color 0.2s;
         }
 
         /* Countdown sections use a distinct tint */
-        .period-secondary.countdown { color: var(--clr-countdown); }
+        .period-secondary.countdown { color: var(--clr-text-countdown); }
 
         /* Monthly section disabled/exceeded states */
-        .period-label.label-disabled { color: var(--clr-label-ms-disabled); }
-        .period-label.label-exceeded { color: var(--clr-label-ms-exceeded); }
-        .period-secondary.warn-reset { color: var(--clr-warn-reset); }
-
-        .period-secondary--spacer { display: none; }
-        :host(.mode-horizontal) .period-secondary--spacer { display: block; visibility: hidden; }
+        .period-label.label-disabled { color: var(--clr-state-disabled); }
+        .period-label.label-exceeded { color: var(--clr-exceeded); }
+.period-secondary--spacer { display: none; }
+        :host(.mode-horizontal) .period-secondary--spacer {
+            display: block; visibility: hidden;
+        }
 
         /* ── State modifiers — apply to primary and/or secondary ── */
         .period-primary.is-loading,
-        .period-secondary.is-loading { color: var(--clr-loading);  }
+        .period-secondary.is-loading { color: var(--clr-text-loading);  }
         .period-primary.is-failed,
-        .period-secondary.is-failed  { color: var(--clr-failed);   }
-        .period-primary.warn-over,
-        .period-secondary.warn-over  { color: var(--clr-warn-over); }
-        .period-primary.warn-high,
-        .period-secondary.warn-high  { color: var(--clr-warn-7d);  }
-        .period-primary.warn-5h      { color: var(--clr-warn-5h);  }
-        .period-primary.warn-7d      { color: var(--clr-warn-7d);  }
+        .period-secondary.is-failed  { color: var(--clr-text-failed);   }
+        .period-primary.warn-5h      { color: var(--clr-state-warn-5h);  }
+        .period-primary.warn-7d      { color: var(--clr-state-warn-7d);  }
 
         /* ── Buttons ── */
         .panel-button {
             box-sizing: border-box;
-            width: 1.8em;
-            text-align: center;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: monospace;
             font-size: var(--font-lg);
-            line-height: 1;
             cursor: pointer;
-            padding: 1px 0;
             border-radius: 7px;
-            background: var(--clr-btn-bg);
+            background: var(--clr-bg-btn);
             transition: background 0.2s;
         }
 
-        .panel-button:hover { background: var(--clr-btn-hover); }
+        .panel-button svg { display: block; }
+
+        .panel-button:hover { background: var(--clr-bg-btn-hover); }
     `;
         shadow.appendChild(styleElement);
 
-        ({ section: fiveHourSectionEl, value: fiveHourValueEl, countdown: fiveHourCountdownEl } =
-            makePeriodSection('5h', true));
-        if (fiveHourCountdownEl) fiveHourCountdownEl.classList.add('countdown');
+        ({
+            section: fiveHourSectionElement,
+            value: fiveHourValueElement,
+            countdown: fiveHourCountdownElement,
+        } = makePeriodSection('5h', true));
+        if (fiveHourCountdownElement) fiveHourCountdownElement.classList.add('countdown');
 
-        ({ section: sevenDaySectionEl, value: sevenDayValueEl, countdown: sevenDayCountdownEl } =
-            makePeriodSection('7d', true));
-        if (sevenDayCountdownEl) sevenDayCountdownEl.classList.add('countdown');
+        ({
+            section: sevenDaySectionElement,
+            value: sevenDayValueElement,
+            countdown: sevenDayCountdownElement,
+        } = makePeriodSection('7d', true));
+        if (sevenDayCountdownElement) sevenDayCountdownElement.classList.add('countdown');
 
-        ({ section: monthlySectionEl, label: monthlyLabelEl, value: monthlyValueEl, countdown: monthlyUtilEl } =
-            makePeriodSection('MS', true));
-        if (monthlyUtilEl) monthlyUtilEl.classList.add('countdown');
+        ({
+            section: monthlySectionElement,
+            label: monthlyLabelElement,
+            value: monthlyValueElement,
+            countdown: monthlyUtilElement,
+        } = makePeriodSection('MS', true));
+        if (monthlyUtilElement) monthlyUtilElement.classList.add('countdown');
 
         modeButtonElement = document.createElement('div');
         modeButtonElement.id = 'mode-button';
         modeButtonElement.className = 'panel-button';
         modeButtonElement.title = 'Switch layout mode';
-        modeButtonElement.addEventListener('click', (event) => { event.stopPropagation(); toggleMode(); });
+        modeButtonElement.addEventListener('click', (event) => {
+            event.stopPropagation(); toggleMode();
+        });
 
         refreshButtonElement = document.createElement('div');
         refreshButtonElement.id = 'refresh-button';
         refreshButtonElement.className = 'panel-button';
         refreshButtonElement.textContent = '\u21bb'; /* ↻ */
-        refreshButtonElement.addEventListener('click', (event) => { event.stopPropagation(); fetchStats(); });
+        refreshButtonElement.addEventListener('click', (event) => {
+            event.stopPropagation(); fetchStats();
+        });
 
         const buttonsGroup = document.createElement('div');
         buttonsGroup.className = 'buttons-group';
         buttonsGroup.append(modeButtonElement, refreshButtonElement);
 
-        const makeSep = () => { const d = document.createElement('div'); d.className = 'section-separator'; return d; };
-        shadow.append(fiveHourSectionEl, makeSep(), sevenDaySectionEl, makeSep(), monthlySectionEl, makeSep(), buttonsGroup);
+        const makeSep = () => {
+            const d = document.createElement('div');
+            d.className = 'section-separator';
+            return d;
+        };
+        panelElement = document.createElement('div');
+        panelElement.className = 'container';
+        panelElement.append(
+            fiveHourSectionElement, makeSep(),
+            sevenDaySectionElement, makeSep(),
+            monthlySectionElement,  makeSep(),
+            buttonsGroup
+        );
+        shadow.appendChild(panelElement);
         document.body.appendChild(widget);
 
         /* Restore saved state (position + mode) */
@@ -617,19 +697,21 @@
      * @returns {void}
      */
     function setFetchStatus(status) {
-        [fiveHourValueEl, sevenDayValueEl, monthlyValueEl, monthlyUtilEl].forEach(el => {
+        [fiveHourValueElement, sevenDayValueElement, monthlyValueElement, monthlyUtilElement]
+        .forEach(el => {
             if (!el) return;
             el.classList.remove('is-loading', 'is-failed');
             if (status === 'loading') el.classList.add('is-loading');
             if (status === 'failed')  el.classList.add('is-failed');
             if (status === 'loading' || status === 'failed') {
-                el.classList.remove('warn-5h', 'warn-7d', 'warn-over', 'warn-high');
+                el.classList.remove('warn-5h', 'warn-7d');
             }
         });
 
-        if (monthlyValueEl) monthlyValueEl.style.color = '';
-        if (monthlyUtilEl)  monthlyUtilEl.classList.remove('warn-reset');
-        if (monthlyLabelEl) monthlyLabelEl.classList.remove('label-disabled', 'label-exceeded');
+        if (monthlyValueElement) monthlyValueElement.style.color = '';
+        if (monthlyUtilElement)  monthlyUtilElement.style.color  = '';
+        if (monthlyLabelElement)
+            monthlyLabelElement.classList.remove('label-disabled', 'label-exceeded');
 
         if (refreshButtonElement) {
             const lastRefreshLine = lastUpdated
@@ -661,7 +743,8 @@
         /** @type {boolean} */ let active = false;
         /** @type {boolean} */ let dragMoved = false;
 
-        draggableElement.addEventListener('mousedown', (/** @type {MouseEvent} */ event) => {
+        draggableElement.addEventListener('mousedown',
+        (/** @type {MouseEvent} */ event) => {
             if (event.button !== 0) return;
             active = true;
             dragMoved = false;
@@ -679,17 +762,24 @@
             event.preventDefault();
         });
 
-        document.addEventListener('mousemove', (/** @type {MouseEvent} */ event) => {
+        document.addEventListener('mousemove',
+        (/** @type {MouseEvent} */ event) => {
             if (!active) return;
             if (currentMode === 'horizontal') {
                 const deltaX = event.clientX - startX;
                 if (Math.abs(deltaX) > 4) dragMoved = true;
-                const clamped = Math.max(0, Math.min(window.innerWidth - draggableElement.offsetWidth, startLeft + deltaX));
+                const clamped = Math.max(0, Math.min(
+                    window.innerWidth - draggableElement.offsetWidth,
+                    startLeft + deltaX
+                ));
                 draggableElement.style.left = clamped + 'px';
             } else {
                 const deltaY = event.clientY - startY;
                 if (Math.abs(deltaY) > 4) dragMoved = true;
-                const clamped = Math.max(0, Math.min(window.innerHeight - draggableElement.offsetHeight, startTop + deltaY));
+                const clamped = Math.max(0, Math.min(
+                    window.innerHeight - draggableElement.offsetHeight,
+                    startTop + deltaY
+                ));
                 draggableElement.style.top = clamped + 'px';
             }
         });
@@ -728,35 +818,40 @@
         if (!organizationId) return;
         setFetchStatus('loading');
         try {
-            const fetchOptions = {
-                credentials: 'include',
-                headers: {
-                    'User-Agent': navigator.userAgent,
-                    'Accept': '*/*',
-                    'Accept-Language': (navigator.languages || []).join(',') || navigator.language || 'en-US',
-                    'content-type': 'application/json',
-                    'Sec-Fetch-Dest': 'empty',
-                    'Sec-Fetch-Mode': 'cors',
-                    'Sec-Fetch-Site': 'same-origin',
-                    'Priority': 'u=4',
-                    'Pragma': 'no-cache',
-                    'Cache-Control': 'no-cache'
-                },
-                referrer: 'https://claude.ai/settings/usage',
-                method: 'GET',
-                mode: 'cors'
-            };
+            const makeRequest = (path) => new Request(
+                `https://claude.ai/api/organizations/${organizationId}/${path}`,
+                {
+                    credentials: /** @type {RequestCredentials} */ ('include'),
+                    headers: {
+                        'User-Agent': navigator.userAgent,
+                        'Accept': '*/*',
+                        'Accept-Language': navigator.languages.join(','),
+                        'content-type': 'application/json',
+                        'Sec-Fetch-Dest': 'empty',
+                        'Sec-Fetch-Mode': 'cors',
+                        'Sec-Fetch-Site': 'same-origin',
+                        'Priority': 'u=4',
+                        'Pragma': 'no-cache',
+                        'Cache-Control': 'no-cache'
+                    },
+                    referrer: 'https://claude.ai/settings/usage',
+                    method: 'GET',
+                    mode: 'cors'
+                }
+            );
 
             const [usageResponse, overageResponse] = await Promise.all([
-                fetch(`https://claude.ai/api/organizations/${organizationId}/usage`, fetchOptions),
-                fetch(`https://claude.ai/api/organizations/${organizationId}/overage_spend_limit`, fetchOptions),
+                fetch(makeRequest('usage')),
+                fetch(makeRequest('overage_spend_limit')),
             ]);
             if (!usageResponse.ok) throw new Error('HTTP ' + usageResponse.status);
 
-            const [data, overage] = /** @type {[UsageData, OverageData|null]} */ (await Promise.all([
-                usageResponse.json(),
-                overageResponse.ok ? overageResponse.json() : Promise.resolve(null),
-            ]));
+            const [data, overage] = /** @type {[UsageData, OverageData|null]} */ (
+                await Promise.all([
+                    usageResponse.json(),
+                    overageResponse.ok ? overageResponse.json() : Promise.resolve(null),
+                ])
+            );
             console.debug('[claude-ai-usage-widget] usage data:', data);
             console.debug('[claude-ai-usage-widget] overage data:', overage);
 
@@ -768,10 +863,10 @@
             const fiveHourResetFull = formatResetTime(data?.five_hour?.resets_at);
             const sevenDayResetFull = formatResetTime(data?.seven_day?.resets_at);
 
-            if (fiveHourValueEl)     fiveHourValueEl.textContent     = fiveHourPct;
-            if (fiveHourCountdownEl) fiveHourCountdownEl.textContent = fiveHourCountdown;
-            if (sevenDayValueEl)     sevenDayValueEl.textContent     = sevenDayPct;
-            if (sevenDayCountdownEl) sevenDayCountdownEl.textContent = sevenDayCountdown;
+            if (fiveHourValueElement)     fiveHourValueElement.textContent     = fiveHourPct;
+            if (fiveHourCountdownElement) fiveHourCountdownElement.textContent = fiveHourCountdown;
+            if (sevenDayValueElement)     sevenDayValueElement.textContent     = sevenDayPct;
+            if (sevenDayCountdownElement) sevenDayCountdownElement.textContent = sevenDayCountdown;
 
             /* --- Monthly (overage endpoint) --- */
             const overageEnabled  = overage?.is_enabled === true;
@@ -787,80 +882,92 @@
             const effectiveResetIso = disabledUntilRaw
                 ?? new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
             const effectiveResetDate = new Date(effectiveResetIso);
-            const monthPeriodMs = effectiveResetDate.getTime() - new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+            const monthPeriodMs = effectiveResetDate.getTime()
+                - new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
-            if (monthlyValueEl) monthlyValueEl.textContent = overageEnabled ? formatDollars(rawUsedCredits) : '--';
-            if (monthlyUtilEl)  monthlyUtilEl.textContent  = overageEnabled ? formatTimeUntilReset(effectiveResetIso) : '--';
+            if (monthlyValueElement)
+                monthlyValueElement.textContent = overageEnabled ? formatDollars(rawUsedCredits) : '--';
+            if (monthlyUtilElement)
+                monthlyUtilElement.textContent = overageEnabled ? formatTimeUntilReset(effectiveResetIso) : '--';
 
             lastUpdated = new Date();
             setFetchStatus('ok'); /* clears inline color, label-disabled, label-exceeded, warn-reset */
 
-            /* Monthly value: green → orange gradient via inline style */
-            if (monthlyValueEl) {
-                monthlyValueEl.style.color = (overageEnabled && overageUtilization != null)
-                    ? monthlySpendColor(overageUtilization) : '';
-            }
-
-            /* Monthly countdown: subdued red when limit exceeded */
-            if (monthlyUtilEl) {
-                monthlyUtilEl.classList.toggle('warn-reset', overageExceeded);
-            }
+            /* Monthly value + countdown: shared green → orange → red colour */
+            const monthlyColor = (overageEnabled && overageUtilization != null)
+                ? monthlySpendColor(overageUtilization, overageExceeded) : '';
+            if (monthlyValueElement) monthlyValueElement.style.color = monthlyColor;
+            if (monthlyUtilElement)  monthlyUtilElement.style.color  = monthlyColor;
 
             /* MS label: grey when feature off; matte red when limit exceeded */
-            if (monthlyLabelEl) {
-                monthlyLabelEl.classList.toggle('label-disabled', !overageEnabled && !overageExceeded);
-                monthlyLabelEl.classList.toggle('label-exceeded', overageExceeded);
+            if (monthlyLabelElement) {
+                monthlyLabelElement.classList.toggle(
+                    'label-disabled', !overageEnabled && !overageExceeded
+                );
+                monthlyLabelElement.classList.toggle('label-exceeded', overageExceeded);
             }
 
             /* 5h / 7d threshold colours */
             const fiveHourOver = (data?.five_hour?.utilization ?? 0) > 75;
             const sevenDayOver = (data?.seven_day?.utilization ?? 0) > 75;
-            if (fiveHourValueEl) fiveHourValueEl.classList.toggle('warn-5h', fiveHourOver);
-            if (sevenDayValueEl) sevenDayValueEl.classList.toggle('warn-7d', sevenDayOver);
+            if (fiveHourValueElement)
+                fiveHourValueElement.classList.toggle('warn-5h', fiveHourOver);
+            if (sevenDayValueElement)
+                sevenDayValueElement.classList.toggle('warn-7d', sevenDayOver);
 
             /* --- Tooltips --- */
-            const FH_MS = 5 * 60 * 60 * 1000;
-            const SD_MS = 7 * 24 * 60 * 60 * 1000;
+            const fiveHourPeriodMs = 5 * 60 * 60 * 1000;
+            const sevenDayPeriodMs = 7 * 24 * 60 * 60 * 1000;
 
-            if (fiveHourSectionEl) {
-                fiveHourSectionEl.title = [
+            if (fiveHourSectionElement) {
+                fiveHourSectionElement.title = [
                     'usage:     ' + fiveHourPct,
                     'resets in: ' + fiveHourCountdown,
                     'resets at: ' + fiveHourResetFull,
-                    'elapsed:   ' + periodElapsed(data?.five_hour?.resets_at, FH_MS),
+                    'elapsed:   ' + periodElapsed(data?.five_hour?.resets_at, fiveHourPeriodMs),
                 ].join('\n');
             }
-            if (sevenDaySectionEl) {
-                const sevenDayDate = data?.seven_day?.resets_at ? new Date(data.seven_day.resets_at) : null;
+            if (sevenDaySectionElement) {
+                const sevenDayDate = data?.seven_day?.resets_at
+                    ? new Date(data.seven_day.resets_at) : null;
                 const sevenDayOfWeek = (sevenDayDate && !isNaN(sevenDayDate.getTime()))
                     ? sevenDayDate.toLocaleDateString([], { weekday: 'long' }) : '';
-                sevenDaySectionEl.title = [
+                sevenDaySectionElement.title = [
                     'usage:     ' + sevenDayPct,
                     'resets in: ' + sevenDayCountdown,
-                    'resets at: ' + [sevenDayResetFull, sevenDayOfWeek].filter(Boolean).join(' '),
-                    'elapsed:   ' + periodElapsed(data?.seven_day?.resets_at, SD_MS),
+                    'resets at: ' + [sevenDayResetFull, sevenDayOfWeek]
+                        .filter(Boolean).join(' '),
+                    'elapsed:   ' + periodElapsed(data?.seven_day?.resets_at, sevenDayPeriodMs),
                 ].join('\n');
             }
-            if (monthlySectionEl && overage) {
-                const spendStr       = overageEnabled && rawUsedCredits != null ? '$' + (rawUsedCredits / 100).toFixed(2) : '--';
-                const limitStr       = overageEnabled && rawCreditLimit != null ? '$' + (rawCreditLimit / 100).toFixed(2) : '--';
-                const currency       = overage?.currency ?? '';
-                const utilStr        = overageUtilization != null ? formatPercent(overageUtilization) : '--';
-                const resetInStr     = overageEnabled ? formatTimeUntilReset(effectiveResetIso) : '--';
-                const resetAtStr     = overageEnabled ? formatResetTime(effectiveResetIso) : '--';
+            if (monthlySectionElement && overage) {
+                const spendStr = overageEnabled && rawUsedCredits != null
+                    ? '$' + (rawUsedCredits / 100).toFixed(2) : '--';
+                const limitStr = overageEnabled && rawCreditLimit != null
+                    ? '$' + (rawCreditLimit / 100).toFixed(2) : '--';
+                const currency   = overage?.currency ?? '';
+                const utilStr    = overageUtilization != null
+                    ? formatPercent(overageUtilization) : '--';
+                const resetInStr = overageEnabled
+                    ? formatTimeUntilReset(effectiveResetIso) : '--';
+                const resetAtStr = overageEnabled
+                    ? formatResetTime(effectiveResetIso) : '--';
                 const resetDayOfWeek = overageEnabled && !isNaN(effectiveResetDate.getTime())
                     ? effectiveResetDate.toLocaleDateString([], { weekday: 'long' }) : '';
-                const monthElapsed   = overageEnabled ? periodElapsed(effectiveResetIso, monthPeriodMs) : '--';
+                const monthElapsed = overageEnabled
+                    ? periodElapsed(effectiveResetIso, monthPeriodMs) : '--';
                 const disabledReason = overage?.disabled_reason;
                 const reasonStr      = disabledReason
-                    ? disabledReason.replace(/_/g, ' ').replace(/^./, (/** @type {string} */ c) => c.toUpperCase())
+                    ? disabledReason.replace(/_/g, ' ')
+                        .replace(/^./, (/** @type {string} */ c) => c.toUpperCase())
                     : null;
-                monthlySectionEl.title = [
+                monthlySectionElement.title = [
                     'utilization:  ' + utilStr,
                     'resets in:    ' + resetInStr,
                     'resets at:    ' + [resetAtStr, resetDayOfWeek].filter(Boolean).join(' '),
                     'elapsed:      ' + monthElapsed,
-                    'spend:        ' + spendStr + ' / ' + limitStr + (currency ? ' ' + currency : ''),
+                    'spend:        ' + spendStr + ' / ' + limitStr
+                        + (currency ? ' ' + currency : ''),
                     ...(reasonStr ? ['reason:       ' + reasonStr] : []),
                 ].join('\n');
             }
